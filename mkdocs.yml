@@ -1,0 +1,52 @@
+site_name: biomcp-trialgpt
+repo_url: https://github.com/genomoncology/biomcp-trialgpt
+site_url: https://genomoncology.github.io/biomcp-trialgpt
+site_description: Demonstration of TrialGPT agents using BioMCP.
+site_author: Ian Maurer
+edit_uri: edit/main/docs/
+repo_name: genomoncology/biomcp-trialgpt
+copyright: Maintained by <a href="https://genomoncology.com">genomoncology</a>.
+
+nav:
+  - Home: index.md
+  - Modules: modules.md
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: ["src/biomcp_trialgpt"]
+theme:
+  name: material
+  feature:
+    tabs: true
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: white
+      accent: deep orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: deep orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/genomoncology/biomcp-trialgpt
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/biomcp-trialgpt
+
+markdown_extensions:
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex:
+      generic: true
