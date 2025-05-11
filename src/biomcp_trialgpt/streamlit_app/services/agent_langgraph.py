@@ -2,44 +2,152 @@ import networkx as nx
 from typing import List, Dict, Any, Optional
 from datetime import date
 from .biomcp_client import BioMCPClient
-from .agent_openai import extract_concepts, match_eligibility, score_trial
+from .note_extractor import parse_clinical_note
+from .eligibility import run_eligibility
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import json
+from .scoring import run_scoring
 
 def run_langgraph_agent(
-    client: BioMCPClient,
-    patient_data: Dict[str, Any],
-    recruiting_status: Optional[str] = None,
-    min_date: Optional[date] = None,
-    max_date: Optional[date] = None,
-    phase: Optional[str] = None,
-) -> List[Dict[str, Any]]:
-    """Agent pipeline orchestrated as a directed graph using NetworkX."""
-    # Define graph structure
-    graph = nx.DiGraph()
-    graph.add_edges_from([
-        ('concepts', 'retrieve'),
-        ('retrieve', 'eligibility'),
-        ('eligibility', 'scoring'),
-    ])
-    # 1) Extract concepts
-    diagnosis = patient_data.get('diagnosis', '')
-    concepts_list = extract_concepts(diagnosis)
-    # 2) Retrieve trials via BioMCP with filters
-    conditions = patient_data.get('conditions', [])
-    terms = patient_data.get('terms', [])
-    interventions = patient_data.get('interventions', [])
-    trials = client.retrieve_trials(
-        conditions=conditions,
-        terms=terms,
-        interventions=interventions,
-        recruiting_status=recruiting_status,
-        min_date=min_date,
-        max_date=max_date,
-        phase=phase,
-    )
-    # 3) Eligibility and scoring
-    results: List[Dict[str, Any]] = []
-    for trial in trials:
-        explanation = match_eligibility(patient_data, trial)
-        score = score_trial(patient_data, trial)
-        results.append({**trial, 'explanation': explanation, 'score': score})
-    return results
+    presentation: str,
+    llm_model: str,
+    recruiting_status: str,
+    min_date: date,
+    max_date: date,
+    phase: str,
+    step: str = "all",
+    step1_data = None,
+    step2_data = None,
+    step3_data = None,
+) -> Dict[str, Any]:
+    """Run the LangGraph agent pipeline."""
+    # Execute only the requested step or all steps
+    if step == "step1" or step == "all":
+        # Step 1: Clinical note extraction
+        data, prompt, response = parse_clinical_note(presentation, llm_model)
+        step1_result = {
+            "model": llm_model,
+            "prompt": prompt,
+            "response": response,
+            "data": data
+        }
+        if step == "step1":
+            return step1_result
+    else:
+        step1_result = step1_data
+    
+    if step == "step2" or step == "all":
+        # Step 2: Trial retrieval
+        client = BioMCPClient()
+        # Handle different date formats and None values
+        if min_date is None:
+            min_date_str = "2018-01-01"  # Default to 2018
+        elif isinstance(min_date, int):
+            min_date_str = f"{min_date}-01-01"
+        else:
+            min_date_str = min_date.strftime("%Y-%m-%d")
+            
+        if max_date is None:
+            from datetime import datetime
+            current_year = datetime.now().year
+            max_date_str = f"{current_year + 1}-12-31"  # Default to next year
+        elif isinstance(max_date, int):
+            max_date_str = f"{max_date}-12-31"
+        else:
+            max_date_str = max_date.strftime("%Y-%m-%d")
+        
+        params = {
+            "recruiting_status": recruiting_status,
+            "min_date": min_date_str,
+            "max_date": max_date_str,
+            "phase": phase,
+            "conditions": step1_result["data"].get("conditions", []),
+            "terms": step1_result["data"].get("terms", []),
+            "interventions": step1_result["data"].get("interventions", []),
+        }
+        trials_list = client.retrieve_trials(**params)
+        step2_result = {"params": params, "response": trials_list}
+        if step == "step2":
+            return step2_result
+    else:
+        step2_result = step2_data
+        trials_list = step2_result["response"]
+    
+    if step == "step3" or step == "all":
+        # Step 3: Eligibility matching (parallel)
+        eligibility_logs = {}
+        max_workers = max(1, min(len(trials_list), 5))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_key = {
+                executor.submit(run_eligibility, presentation, t, llm_model):
+                (t.get("NCT Number") or t.get("nct_id", ""))
+                for t in trials_list
+            }
+            for future in as_completed(future_to_key):
+                key = future_to_key[future]
+                try:
+                    result = future.result()
+                except Exception as e:
+                    eligibility_logs[key] = {
+                        "inclusion": ("", f"Error: {e}"),
+                        "exclusion": ("", f"Error: {e}"),
+                    }
+                    continue
+                eligibility_logs[key] = result
+        if step == "step3":
+            return eligibility_logs
+    else:
+        eligibility_logs = step3_data
+    
+    if step == "step4" or step == "all":
+        # Step 4: Trial Scoring & Ranking (parallel)
+        scoring_logs = {}
+        max_workers = max(1, min(len(trials_list), 5))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_key = {}
+            for trial in trials_list:
+                key = trial.get("NCT Number") or trial.get("nct_id", "")
+                inc_p, inc_r = eligibility_logs[key]["inclusion"]
+                exc_p, exc_r = eligibility_logs[key]["exclusion"]
+                pred_str = f"Inclusion predictions:\n{inc_r}\nExclusion predictions:\n{exc_r}"
+                future = executor.submit(run_scoring, presentation, trial, pred_str, llm_model)
+                future_to_key[future] = key
+            for future in as_completed(future_to_key):
+                key = future_to_key[future]
+                try:
+                    _, score_resp = future.result()
+                except Exception:
+                    scoring_logs[key] = {}
+                    continue
+                try:
+                    # Extract JSON from response - LLMs sometimes add text before/after JSON
+                    import re
+                    json_match = re.search(r'(\{.*\})', score_resp, re.DOTALL)
+                    if json_match:
+                        json_str = json_match.group(1)
+                        data = json.loads(json_str)
+                    else:
+                        data = json.loads(score_resp)  # Try direct parsing as fallback
+                except:
+                    # If parsing fails, create a basic structure with error info
+                    data = {
+                        "relevance_explanation": "Error parsing response",
+                        "relevance_score_R": 0,
+                        "eligibility_explanation": "Error parsing response",
+                        "eligibility_score_E": 0,
+                        "raw_response": score_resp[:100] + "..." if len(score_resp) > 100 else score_resp
+                    }
+                scoring_logs[key] = data
+        ranked = sorted(scoring_logs.items(), key=lambda kv: kv[1].get("eligibility_score_E", 0), reverse=True)
+        step4_result = {"scoring_logs": scoring_logs, "ranked": ranked}
+        if step == "step4":
+            return step4_result
+    
+    # If we're running all steps, return the complete logs
+    if step == "all":
+        return {
+            "step1": step1_result, 
+            "step2": step2_result, 
+            "step3": eligibility_logs, 
+            "step4": step4_result
+        }

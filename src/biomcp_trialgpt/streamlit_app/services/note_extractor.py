@@ -8,7 +8,7 @@ except ImportError:
     import google.generativeai as genai
 from typing import Dict, Any, Tuple
 from openai.error import RateLimitError
-from .agent_openai import _create_chat_completion
+from .llm_utils import create_chat_completion as _create_chat_completion
 
 # Configure API key (in case not already set)
 _api_key = os.getenv("OPENAI_API_KEY")
