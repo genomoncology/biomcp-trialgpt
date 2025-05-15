@@ -4,6 +4,7 @@ from typing import List, Dict, Any, Optional, Sequence, Annotated, TypedDict, Li
 from datetime import date, datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import asyncio
 
 # Import LangGraph components
 from langgraph.graph import StateGraph, END
@@ -111,8 +112,14 @@ def retrieve_trials(
         "terms": terms,
         "interventions": interventions,
     }
-    trials = client.retrieve_trials(**params)
-    return trials
+    # Create a new event loop and run the async function
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        trials = loop.run_until_complete(client.retrieve_trials(**params))
+        return trials
+    finally:
+        loop.close()
 
 
 @tool
@@ -247,15 +254,22 @@ def retrieve_clinical_trials(state: AgentState) -> Dict[str, Any]:
     """Retrieve clinical trials based on parameters."""
     params = state["retrieval_params"]
 
-    trials = retrieve_trials(
-        params["conditions"],
-        params["terms"],
-        params["interventions"],
-        params["recruiting_status"],
-        params["min_date"],
-        params["max_date"],
-        params["phase"]
-    )
+    # Retrieve trials
+    client = BioMCPClient()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        trials = loop.run_until_complete(client.retrieve_trials(
+            conditions=params.get("conditions", []),
+            terms=params.get("terms", []),
+            interventions=params.get("interventions", []),
+            recruiting_status=params.get("recruiting_status", ""),
+            min_date=params.get("min_date", ""),
+            max_date=params.get("max_date", ""),
+            phase=params.get("phase", "")
+        ))
+    finally:
+        loop.close()
 
     return {
         "trials": trials,
@@ -504,7 +518,20 @@ def run_langgraph_agent(
 
             # Retrieve trials
             client = BioMCPClient()
-            trials = client.retrieve_trials(**params)
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                trials = loop.run_until_complete(client.retrieve_trials(
+                    conditions=params.get("conditions", []),
+                    terms=params.get("terms", []),
+                    interventions=params.get("interventions", []),
+                    recruiting_status=params.get("recruiting_status", ""),
+                    min_date=params.get("min_date", ""),
+                    max_date=params.get("max_date", ""),
+                    phase=params.get("phase", "")
+                ))
+            finally:
+                loop.close()
 
             # Format as in original code
             return {
