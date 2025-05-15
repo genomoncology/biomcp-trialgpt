@@ -1,26 +1,29 @@
 import asyncio
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
-from typing import Dict, Any, List, Optional, Union
+from functools import wraps
+from typing import Dict, Any, List, Optional, Union, Tuple, TypeVar, Callable, Type
 
 from pydantic import BaseModel, Field, model_validator, field_validator
 from pydantic_ai import Agent, RunContext
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Import necessary components from the original code
+# Import necessary components
 from .biomcp_client import BioMCPClient
 from .note_extractor import parse_clinical_note
 from .eligibility import run_eligibility
 from .scoring import run_scoring
 from .response_formatter import format_response_for_ui
+
+# Type variables for generic functions
+T = TypeVar('T')
+R = TypeVar('R')
 
 
 #######################
@@ -46,9 +49,7 @@ class PatientData(BaseModel):
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PatientData":
         """Create a PatientData from a dictionary."""
-        if "values" in data and isinstance(data["values"], dict):
-            return cls(**data["values"])
-        return cls(**data)
+        return cls(**(data.get("values", {}) if "values" in data else data))
 
 
 class TrialFilter(BaseModel):
@@ -89,41 +90,29 @@ class Trial(BaseModel):
     def ensure_trial_id(cls, data):
         """Ensure we have a trial ID from one of the possible fields."""
         if isinstance(data, dict):
-            # Try to find an ID from various possible fields
+            # Get ID or generate fallback
             nct_id = data.get('nct_id') or data.get('NCT_Number') or data.get('NCT Number')
-
-            # If we still don't have an ID, generate a fallback
             if not nct_id:
-                # Use title or a UUID as fallback
                 if data.get('title'):
                     import hashlib
-                    title_hash = hashlib.md5(data['title'].encode()).hexdigest()[:8]
-                    nct_id = f"UNKNOWN-{title_hash}"
+                    nct_id = f"UNKNOWN-{hashlib.md5(data['title'].encode()).hexdigest()[:8]}"
                 else:
                     import uuid
                     nct_id = f"UNKNOWN-{str(uuid.uuid4())[:8]}"
-
-            # Update the data with the ID
             data['nct_id'] = nct_id
-
         return data
 
     @field_validator('nct_id', mode='before')
     @classmethod
     def normalize_nct_id(cls, v, info):
         """Handle different NCT ID formats."""
-        if not v:
-            values = info.data
-            return values.get("NCT_Number") or values.get("NCT Number")
-        return v
+        return v or info.data.get("NCT_Number") or info.data.get("NCT Number")
 
     @field_validator('conditions', 'interventions', mode='before')
     @classmethod
     def parse_delimited_lists(cls, v):
         """Parse pipe-delimited strings into lists."""
-        if isinstance(v, str):
-            return [item.strip() for item in v.split("|") if item.strip()]
-        return v
+        return [item.strip() for item in v.split("|") if item.strip()] if isinstance(v, str) else v
 
 
 class EligibilityResult(BaseModel):
@@ -134,14 +123,13 @@ class EligibilityResult(BaseModel):
     exclusion_decision: str = ""
     exclusion_explanation: str = ""
 
-    @field_validator('inclusion_decision', 'inclusion_explanation',
-                     'exclusion_decision', 'exclusion_explanation', mode='before')
+    @field_validator('inclusion_decision', 'inclusion_explanation', 'exclusion_decision', 'exclusion_explanation',
+                     mode='before')
     @classmethod
     def parse_tuple_results(cls, v, info):
         """Handle tuple format from legacy code."""
-        field_name = info.field_name
         if isinstance(v, tuple) and len(v) == 2:
-            return v[1] if field_name.endswith('explanation') else v[0]
+            return v[1] if info.field_name.endswith('explanation') else v[0]
         return v
 
 
@@ -182,24 +170,23 @@ class PipelineResult(BaseModel):
     ranked_trials: List[RankedTrial] = Field(default_factory=list)
 
 
-#######################
-# PIPELINE DEPENDENCIES
-#######################
-
 class PipelineConfig(BaseModel):
     """Configuration for the clinical trial matching pipeline."""
-    clinical_note: str  # Clinical note text
-    llm_model: str  # LLM model to use
-    recruiting_status: str  # Trial recruiting status filter
+    clinical_note: str
+    llm_model: str
+    recruiting_status: str
     min_date: Union[date, str, int] = Field(default_factory=lambda: date(2018, 1, 1))
     max_date: Union[date, str, int] = None
-    phase: str  # Trial phase filter
+    phase: str
 
     @model_validator(mode='before')
     @classmethod
     def process_dates(cls, data):
         """Handle different date formats."""
-        # Process min_date
+        if not isinstance(data, dict):
+            return data
+
+        # Format min_date
         min_date = data.get('min_date')
         if min_date is None:
             data['min_date'] = "2018-01-01"
@@ -208,11 +195,10 @@ class PipelineConfig(BaseModel):
         elif isinstance(min_date, date):
             data['min_date'] = min_date.strftime("%Y-%m-%d")
 
-        # Process max_date
+        # Format max_date
         max_date = data.get('max_date')
         if max_date is None:
-            current_year = datetime.now().year
-            data['max_date'] = f"{current_year + 1}-12-31"
+            data['max_date'] = f"{datetime.now().year + 1}-12-31"
         elif isinstance(max_date, int):
             data['max_date'] = f"{max_date}-12-31"
         elif isinstance(max_date, date):
@@ -227,7 +213,7 @@ class PipelineConfig(BaseModel):
         model = v.replace('google-', '').replace('anthropic-', '')
 
         # Add provider prefix if missing
-        if not model.startswith(('openai:', 'google-gla:', 'anthropic:')):
+        if not any(model.startswith(p) for p in ('openai:', 'google-gla:', 'anthropic:')):
             if "gpt" in model.lower():
                 model = f"openai:{model}"
             elif "gemini" in model.lower():
@@ -240,36 +226,101 @@ class PipelineConfig(BaseModel):
 
 
 #######################
+# HELPER UTILITIES
+#######################
+
+def error_handler(default_value, error_msg_prefix="Error"):
+    """Decorator for handling errors in async functions with consistent logging."""
+
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            try:
+                return await func(*args, **kwargs)
+            except Exception as e:
+                logger.error(f"{error_msg_prefix}: {e}")
+                return default_value
+
+        return wrapper
+
+    return decorator
+
+
+async def process_batch(
+        items: List[T],
+        process_fn: Callable[[T], R],
+        max_workers: int = 10,
+        process_singles: bool = True,
+        desc: str = "Processing batch"
+) -> List[R]:
+    """Generic batch processor for concurrent operations."""
+    logger.info(f"{desc}: {len(items)} items")
+
+    if not items:
+        logger.warning(f"No items to process in {desc}")
+        return []
+
+    # Process sequentially if small batch or requested
+    if len(items) <= 3 and process_singles:
+        results = []
+        for item in items:
+            try:
+                result = await process_fn(item) if asyncio.iscoroutinefunction(process_fn) else process_fn(item)
+                results.append(result)
+            except Exception as e:
+                logger.error(f"Error processing item: {e}")
+        return results
+
+    # Process concurrently for larger batches
+    actual_max_workers = min(max_workers, len(items))
+    results = []
+
+    with ThreadPoolExecutor(max_workers=actual_max_workers) as executor:
+        # Setup futures
+        if asyncio.iscoroutinefunction(process_fn):
+            # For async functions
+            futures = [(executor.submit(
+                lambda i: asyncio.run(process_fn(i)), item), i)
+                for i, item in enumerate(items)]
+        else:
+            # For sync functions
+            futures = [(executor.submit(process_fn, item), i)
+                       for i, item in enumerate(items)]
+
+        # Collect results while preserving order
+        results_map = {}
+        for future, idx in futures:
+            try:
+                results_map[idx] = future.result()
+            except Exception as e:
+                logger.error(f"Error in batch processing item {idx}: {e}")
+                results_map[idx] = None
+
+        # Convert back to ordered list
+        results = [results_map.get(i) for i in range(len(items))]
+        # Filter out Nones
+        results = [r for r in results if r is not None]
+
+    return results
+
+
+#######################
 # ATOMIC TOOLS
 #######################
 
+@error_handler(PatientData())
 async def extract_patient_data(ctx: RunContext[PipelineConfig]) -> PatientData:
-    """
-    Extract structured patient data from clinical notes.
-    """
+    """Extract structured patient data from clinical notes."""
     logger.info(f"Extracting patient information using model {ctx.deps.llm_model}")
-
-    # Call the original extract function
     data_dict, _, _ = parse_clinical_note(ctx.deps.clinical_note, ctx.deps.llm_model)
-
-    # Convert to our simplified model
-    patient_data = PatientData.from_dict(data_dict)
-    logger.debug(f"Extracted patient data: {patient_data.model_dump(exclude_none=True)}")
-
-    return patient_data
+    return PatientData.from_dict(data_dict)
 
 
-async def search_clinical_trials(
-        ctx: RunContext[PipelineConfig],
-        patient: PatientData
-) -> List[Trial]:
-    """
-    Search for clinical trials based on patient data and filters.
-    """
+@error_handler([])
+async def search_clinical_trials(ctx: RunContext[PipelineConfig], patient: PatientData) -> List[Trial]:
+    """Search for clinical trials based on patient data and filters."""
     logger.info("Searching for clinical trials")
-    client = BioMCPClient()
 
-    # Create filter parameters
     filter_params = {
         "recruiting_status": ctx.deps.recruiting_status,
         "min_date": ctx.deps.min_date,
@@ -280,372 +331,168 @@ async def search_clinical_trials(
         "interventions": patient.interventions
     }
 
-    # Retrieve trials
-    logger.info(f"Retrieving trials with parameters: {filter_params}")
-    trials_data = await client.retrieve_trials(**filter_params)
+    logger.info(f"Set up trial retrieval with parameters: {json.dumps(filter_params, indent=2)}")
+    trials_data = await BioMCPClient().retrieve_trials(**filter_params)
     logger.info(f"Retrieved {len(trials_data)} trials")
 
-    # Debug the trial data if we're getting empty results
-    if trials_data and all(not trial.get('nct_id') for trial in trials_data):
-        logger.debug(f"Trial data format: {json.dumps(trials_data[:1], indent=2, default=str)}")
+    def transform_trial_data(data: dict) -> dict:
+        """Transform BioMCP API trial data to match Trial model fields."""
+        transformed = {"nct_id": data.get("NCT Number"), "title": data.get("Study Title"),
+                       "brief_summary": data.get("Brief Summary"), "detailed_description": data.get("Study Design"),
+                       "status": data.get("Study Status"), "phase": data.get("Phases"),
+                       "study_start_date": data.get("Start Date"), "study_completion_date": data.get("Completion Date"),
+                       "conditions": data.get("Conditions", ""), "interventions": data.get("Interventions", ""),
+                       "enrollment": data.get("Enrollment"), "study_type": data.get("Study Type"),
+                       "study_url": data.get("Study URL"), "study_results": data.get("Study Results"), "locations": [],
+                       "sponsors": [], "eligibility_criteria": None, "eligibility_gender": None, "minimum_age": None,
+                       "maximum_age": None}
+        return transformed
 
-    # Convert to Trial objects
-    trials = []
-    for i, trial_dict in enumerate(trials_data):
-        try:
-            # Make sure we have a minimal valid dict
-            if isinstance(trial_dict, dict) and not trial_dict.get('nct_id'):
-                # Try to extract NCT ID from various fields
-                nct_id = (trial_dict.get('NCT_Number') or
-                          trial_dict.get('NCT Number') or
-                          f"TRIAL-{i + 1}")
-                trial_dict['nct_id'] = nct_id
-
-            trial = Trial.model_validate(trial_dict)
-            trials.append(trial)
-        except Exception as e:
-            logger.warning(f"Failed to parse trial {i + 1}: {e}")
-
-    return trials
+    # Process all trials into Trial objects
+    return [Trial.model_validate(transform_trial_data(t)) for t in trials_data if isinstance(t, dict)]
 
 
-async def assess_trial_eligibility(
-        ctx: RunContext[PipelineConfig],
-        patient: PatientData,
-        trial: Trial
-) -> EligibilityResult:
-    """
-    Assess if a patient is eligible for a specific trial.
-    """
-    logger.info(f"Assessing eligibility for trial {trial.nct_id}")
+@error_handler(None)
+async def assess_trial_eligibility(ctx: RunContext[PipelineConfig], patient: PatientData,
+                                   trial: Trial) -> EligibilityResult:
+    """Assess if a patient is eligible for a specific trial."""
+    trial_id = trial.nct_id or "UNKNOWN-TRIAL"
+    logger.info(f"Assessing eligibility for trial {trial_id}")
 
-    try:
-        # Ensure trial has an ID
-        if not trial.nct_id:
-            logger.warning("Trial missing ID, using fallback")
-            trial_id = "UNKNOWN-TRIAL"
-        else:
-            trial_id = trial.nct_id
+    result = run_eligibility(ctx.deps.clinical_note, trial.model_dump(exclude_none=True), ctx.deps.llm_model)
 
-        # Call eligibility function - make sure to properly await it
-        try:
-            result = run_eligibility(
-                ctx.deps.clinical_note,
-                trial.model_dump(exclude_none=True),
-                ctx.deps.llm_model
-            )
+    # Handle non-async vs async result
+    if not asyncio.iscoroutine(result):
+        inclusion = result.get("inclusion", ("", ""))
+        exclusion = result.get("exclusion", ("", ""))
+    else:
+        result_data = await result
+        inclusion = result_data.get("inclusion", ("", ""))
+        exclusion = result_data.get("exclusion", ("", ""))
 
-            # Handle non-async result from run_eligibility
-            if not asyncio.iscoroutine(result):
-                inclusion = result.get("inclusion", ("", ""))
-                exclusion = result.get("exclusion", ("", ""))
-            else:
-                # If it's actually an awaitable, await it
-                result_data = await result
-                inclusion = result_data.get("inclusion", ("", ""))
-                exclusion = result_data.get("exclusion", ("", ""))
-
-        except Exception as e:
-            logger.error(f"Error calling run_eligibility: {e}")
-            return EligibilityResult(
-                trial_id=trial_id,
-                inclusion_explanation=f"Error in eligibility assessment: {e}",
-                exclusion_explanation=f"Error in eligibility assessment: {e}"
-            )
-
-        # Create structured result
-        return EligibilityResult(
-            trial_id=trial_id,
-            inclusion_decision=inclusion[0] if isinstance(inclusion, tuple) else "",
-            inclusion_explanation=inclusion[1] if isinstance(inclusion, tuple) else str(inclusion),
-            exclusion_decision=exclusion[0] if isinstance(exclusion, tuple) else "",
-            exclusion_explanation=exclusion[1] if isinstance(exclusion, tuple) else str(exclusion)
-        )
-    except Exception as e:
-        logger.error(f"Error in eligibility assessment for trial {getattr(trial, 'nct_id', 'unknown')}: {e}")
-        return EligibilityResult(
-            trial_id=getattr(trial, 'nct_id', 'UNKNOWN-ERROR'),
-            inclusion_explanation=f"Error: {e}",
-            exclusion_explanation=f"Error: {e}"
-        )
-
-
-async def score_trial(
-        ctx: RunContext[PipelineConfig],
-        patient: PatientData,
-        trial: Trial,
-        eligibility: EligibilityResult
-) -> ScoringResult:
-    """
-    Score a trial based on its relevance and eligibility for the patient.
-    """
-    logger.info(f"Scoring trial {trial.nct_id}")
-
-    try:
-        # Ensure trial has an ID
-        if not trial.nct_id:
-            logger.warning("Trial missing ID in scoring, using fallback")
-            trial_id = eligibility.trial_id or "UNKNOWN-TRIAL"
-        else:
-            trial_id = trial.nct_id
-
-        # Format eligibility for scoring
-        pred_str = (
-            f"Inclusion predictions:\n{eligibility.inclusion_explanation}\n"
-            f"Exclusion predictions:\n{eligibility.exclusion_explanation}"
-        )
-
-        # Run scoring - check if it's async or not
-        try:
-            result = run_scoring(
-                ctx.deps.clinical_note,
-                trial.model_dump(exclude_none=True),
-                pred_str,
-                ctx.deps.llm_model
-            )
-
-            # Handle non-async result
-            if not asyncio.iscoroutine(result):
-                _, score_resp = result
-            else:
-                # If it's actually an awaitable, await it
-                _, score_resp = await result
-
-        except Exception as e:
-            logger.error(f"Error calling run_scoring: {e}")
-            return ScoringResult(
-                trial_id=trial_id,
-                relevance_explanation=f"Error in scoring: {e}",
-                eligibility_explanation=f"Error in scoring: {e}"
-            )
-
-        # Extract JSON from response
-        import re
-        json_match = re.search(r'(\{.*\})', score_resp, re.DOTALL)
-
-        try:
-            if json_match:
-                json_str = json_match.group(1)
-                data = json.loads(json_str)
-            else:
-                data = json.loads(score_resp)
-
-            # Map fields to our model
-            return ScoringResult(
-                trial_id=trial_id,
-                relevance_explanation=data.get("relevance_explanation", ""),
-                relevance_score=data.get("relevance_score_R", 0.0),
-                eligibility_explanation=data.get("eligibility_explanation", ""),
-                eligibility_score=data.get("eligibility_score_E", 0.0)
-            )
-        except json.JSONDecodeError:
-            logger.error(f"Error parsing JSON response for {trial_id}")
-            return ScoringResult(
-                trial_id=trial_id,
-                relevance_explanation="Error parsing response",
-                eligibility_explanation="Error parsing response"
-            )
-
-    except Exception as e:
-        logger.error(f"Error scoring trial {getattr(trial, 'nct_id', 'unknown')}: {e}")
-        return ScoringResult(
-            trial_id=getattr(trial, 'nct_id', 'UNKNOWN-ERROR') or 'UNKNOWN-ERROR'
-        )
-
-
-async def rank_trials(
-        ctx: RunContext[PipelineConfig],
-        trials: List[Trial],
-        scoring_results: List[ScoringResult]
-) -> List[RankedTrial]:
-    """
-    Rank trials based on their scores.
-    """
-    logger.info("Ranking trials")
-
-    # Create a mapping of trial IDs to trial data
-    trial_map = {trial.nct_id: trial for trial in trials}
-
-    # Create ranked trials
-    ranked = []
-
-    # Sort scoring results by eligibility score (descending)
-    sorted_scores = sorted(
-        scoring_results,
-        key=lambda x: x.eligibility_score,
-        reverse=True
+    return EligibilityResult(
+        trial_id=trial_id,
+        inclusion_decision=inclusion[0] if isinstance(inclusion, tuple) else "",
+        inclusion_explanation=inclusion[1] if isinstance(inclusion, tuple) else str(inclusion),
+        exclusion_decision=exclusion[0] if isinstance(exclusion, tuple) else "",
+        exclusion_explanation=exclusion[1] if isinstance(exclusion, tuple) else str(exclusion)
     )
 
-    # Create ranked trial objects
-    for score in sorted_scores:
-        trial = trial_map.get(score.trial_id)
-        if not trial:
-            continue
 
-        ranked.append(RankedTrial(
+@error_handler(None)
+async def score_trial(ctx: RunContext[PipelineConfig], patient: PatientData, trial: Trial,
+                      eligibility: EligibilityResult) -> ScoringResult:
+    """Score a trial based on its relevance and eligibility for the patient."""
+    trial_id = trial.nct_id or eligibility.trial_id or "UNKNOWN-TRIAL"
+    logger.info(f"Scoring trial {trial_id}")
+
+    # Format eligibility predictions
+    pred_str = f"Inclusion predictions:\n{eligibility.inclusion_explanation}\nExclusion predictions:\n{eligibility.exclusion_explanation}"
+
+    # Run scoring
+    result = run_scoring(ctx.deps.clinical_note, trial.model_dump(exclude_none=True), pred_str, ctx.deps.llm_model)
+
+    # Handle async vs non-async result
+    if not asyncio.iscoroutine(result):
+        _, score_resp = result
+    else:
+        _, score_resp = await result
+
+    # Extract JSON from response
+    try:
+        json_match = re.search(r'(\{.*\})', score_resp, re.DOTALL)
+        data = json.loads(json_match.group(1) if json_match else score_resp)
+    except:
+        data = {
+            "relevance_explanation": "Error parsing response",
+            "relevance_score_R": 0,
+            "eligibility_explanation": "Error parsing response",
+            "eligibility_score_E": 0
+        }
+
+    return ScoringResult(
+        trial_id=trial_id,
+        relevance_explanation=data.get("relevance_explanation", ""),
+        relevance_score=data.get("relevance_score_R", 0.0),
+        eligibility_explanation=data.get("eligibility_explanation", ""),
+        eligibility_score=data.get("eligibility_score_E", 0.0)
+    )
+
+
+async def rank_trials(ctx: RunContext[PipelineConfig], trials: List[Trial], scoring_results: List[ScoringResult]) -> \
+List[RankedTrial]:
+    """Rank trials based on their scores."""
+    logger.info("Ranking trials")
+
+    # Map trials by ID for quick lookup
+    trial_map = {t.nct_id: t for t in trials if t.nct_id}
+
+    # Sort and create ranked trials
+    return [
+        RankedTrial(
             trial_id=score.trial_id,
-            title=trial.title,
+            title=trial_map.get(score.trial_id, Trial()).title,
             relevance_explanation=score.relevance_explanation,
             relevance_score=score.relevance_score,
             eligibility_explanation=score.eligibility_explanation,
             eligibility_score=score.eligibility_score
-        ))
-
-    return ranked
+        )
+        for score in sorted(
+            scoring_results,
+            key=lambda x: x.eligibility_score,
+            reverse=True
+        )
+        if score.trial_id in trial_map
+    ]
 
 
 #######################
-# ORCHESTRATOR TOOLS
+# BATCH PROCESSING
 #######################
 
-async def process_batch_eligibility(
-        ctx: RunContext[PipelineConfig],
-        patient: PatientData,
-        trials: List[Trial]
-) -> List[EligibilityResult]:
-    """
-    Process eligibility for a batch of trials in parallel.
-    """
-    logger.info(f"Processing eligibility for {len(trials)} trials")
+async def process_batch_eligibility(ctx: RunContext[PipelineConfig], patient: PatientData, trials: List[Trial]) -> List[
+    EligibilityResult]:
+    """Process eligibility for a batch of trials in parallel."""
+    valid_trials = [t for t in trials if t.nct_id]
 
-    # Filter out trials without enough information
-    valid_trials = []
-    for trial in trials:
-        if not trial.nct_id:
-            logger.warning(f"Skipping trial with missing ID: {trial.title}")
-            continue
-        valid_trials.append(trial)
+    async def process_single_trial(trial):
+        return await assess_trial_eligibility(ctx, patient, trial)
 
-    if not valid_trials:
-        logger.warning("No valid trials found for eligibility assessment")
-        return []
-
-    eligibility_results = []
-    max_workers = min(max(1, len(valid_trials)), 10)  # Limit concurrency
-
-    # Process one by one if there are only a few trials
-    if len(valid_trials) <= 3:
-        for trial in valid_trials:
-            try:
-                result = await assess_trial_eligibility(ctx, patient, trial)
-                eligibility_results.append(result)
-            except Exception as e:
-                logger.error(f"Failed to process eligibility for {trial.nct_id}: {e}")
-                # Add a placeholder result
-                eligibility_results.append(EligibilityResult(
-                    trial_id=trial.nct_id,
-                    inclusion_explanation=f"Error: {e}",
-                    exclusion_explanation=f"Error: {e}"
-                ))
-        return eligibility_results
-
-    # For more trials, use concurrent processing
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Create a list to store the futures
-        futures = []
-
-        # Submit tasks
-        for trial in valid_trials:
-            # Create a task that runs the eligibility assessment
-            future = executor.submit(
-                lambda t: asyncio.run(assess_trial_eligibility(ctx, patient, t)),
-                trial
-            )
-            futures.append((future, trial))
-
-        # Collect results
-        for future, trial in futures:
-            try:
-                result = future.result()
-                eligibility_results.append(result)
-            except Exception as e:
-                logger.error(f"Failed to process eligibility for {trial.nct_id}: {e}")
-                # Add a placeholder result
-                eligibility_results.append(EligibilityResult(
-                    trial_id=trial.nct_id,
-                    inclusion_explanation=f"Error processing trial: {e}",
-                    exclusion_explanation=f"Error processing trial: {e}"
-                ))
-
-    return eligibility_results
+    return await process_batch(
+        valid_trials,
+        process_single_trial,
+        max_workers=10,
+        desc="Processing eligibility assessment"
+    )
 
 
-async def process_batch_scoring(
-        ctx: RunContext[PipelineConfig],
-        patient: PatientData,
-        trials: List[Trial],
-        eligibility_results: List[EligibilityResult]
-) -> List[ScoringResult]:
-    """
-    Process scoring for a batch of trials in parallel.
-    """
-    logger.info(f"Processing scoring for {len(trials)} trials")
-
-    # Create a mapping of trial IDs to eligibility results
+async def process_batch_scoring(ctx: RunContext[PipelineConfig], patient: PatientData, trials: List[Trial],
+                                eligibility_results: List[EligibilityResult]) -> List[ScoringResult]:
+    """Process scoring for a batch of trials in parallel."""
+    # Map eligibility results by trial ID
     eligibility_map = {result.trial_id: result for result in eligibility_results if result.trial_id}
 
-    # Filter out trials without valid IDs
+    # Filter valid trials that have eligibility results
     valid_trials = [t for t in trials if t.nct_id and t.nct_id in eligibility_map]
 
-    if not valid_trials:
-        logger.warning("No valid trials found for scoring")
-        return []
+    async def process_single_trial(trial):
+        eligibility = eligibility_map[trial.nct_id]
+        return await score_trial(ctx, patient, trial, eligibility)
 
-    scoring_results = []
-    max_workers = min(max(1, len(valid_trials)), 10)  # Limit concurrency
-
-    # Process one by one if there are only a few trials
-    if len(valid_trials) <= 3:
-        for trial in valid_trials:
-            eligibility = eligibility_map[trial.nct_id]
-            try:
-                result = await score_trial(ctx, patient, trial, eligibility)
-                scoring_results.append(result)
-            except Exception as e:
-                logger.error(f"Failed to process scoring for {trial.nct_id}: {e}")
-                scoring_results.append(ScoringResult(trial_id=trial.nct_id))
-        return scoring_results
-
-    # For more trials, use concurrent processing
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Create a list to store the futures
-        futures = []
-
-        # Submit tasks
-        for trial in valid_trials:
-            eligibility = eligibility_map[trial.nct_id]
-
-            # Create a task that runs the scoring
-            future = executor.submit(
-                lambda t, e: asyncio.run(score_trial(ctx, patient, t, e)),
-                trial, eligibility
-            )
-            futures.append((future, trial))
-
-        # Collect results
-        for future, trial in futures:
-            try:
-                result = future.result()
-                scoring_results.append(result)
-            except Exception as e:
-                logger.error(f"Failed to process scoring for {trial.nct_id}: {e}")
-                scoring_results.append(ScoringResult(trial_id=trial.nct_id))
-
-    return scoring_results
+    return await process_batch(
+        valid_trials,
+        process_single_trial,
+        max_workers=10,
+        desc="Processing trial scoring"
+    )
 
 
 #######################
 # MAIN PIPELINE
 #######################
 
-async def run_clinical_trial_pipeline(
-        ctx: RunContext[PipelineConfig]
-) -> PipelineResult:
-    """
-    Run the complete clinical trial matching pipeline.
-
-    This orchestrates the entire process from extraction to ranking.
-    """
+async def run_clinical_trial_pipeline(ctx: RunContext[PipelineConfig]) -> PipelineResult:
+    """Run the complete clinical trial matching pipeline."""
     logger.info("Starting clinical trial matching pipeline")
 
     # Extract patient data
@@ -657,14 +504,12 @@ async def run_clinical_trial_pipeline(
     logger.info(f"✅ Retrieved {len(trials)} clinical trials")
 
     if not trials:
-        logger.warning("No trials found - returning early")
         return PipelineResult(patient_data=patient_data)
 
-    # Process eligibility in batches
+    # Process eligibility and scoring
     eligibility_results = await process_batch_eligibility(ctx, patient_data, trials)
     logger.info(f"✅ Completed eligibility assessment for {len(eligibility_results)} trials")
 
-    # Process scoring in batches
     scoring_results = await process_batch_scoring(ctx, patient_data, trials, eligibility_results)
     logger.info(f"✅ Completed scoring for {len(scoring_results)} trials")
 
@@ -672,7 +517,6 @@ async def run_clinical_trial_pipeline(
     ranked_trials = await rank_trials(ctx, trials, scoring_results)
     logger.info(f"✅ Ranked {len(ranked_trials)} trials")
 
-    # Return the complete pipeline result
     return PipelineResult(
         patient_data=patient_data,
         retrieved_trials=trials,
@@ -687,36 +531,29 @@ async def run_clinical_trial_pipeline(
 #######################
 
 def get_pipeline_agent(llm_model: str) -> Agent:
-    """
-    Create a Pydantic AI agent for clinical trial matching.
-    """
+    """Create a Pydantic AI agent for clinical trial matching."""
     logger.info(f"Creating agent with model: {llm_model}")
 
-    # Create the agent with all relevant tools
     return Agent(
-        llm_model,
+        llm_model.replace('gpt-', ''),
         deps_type=PipelineConfig,
         output_type=PipelineResult,
         tools=[
-            # Atomic tools
+            # Core tools
             extract_patient_data,
             search_clinical_trials,
             assess_trial_eligibility,
             score_trial,
             rank_trials,
 
-            # Batch processing tools
+            # Batch processing
             process_batch_eligibility,
             process_batch_scoring,
 
-            # Main pipeline tool
+            # Main pipeline
             run_clinical_trial_pipeline
         ],
-        system_prompt=(
-            "You are a clinical trial matching assistant. "
-            "Your role is to extract patient information from clinical notes, "
-            "retrieve relevant trials, assess eligibility, and rank matches."
-        )
+        system_prompt="You are a clinical trial matching assistant. Your role is to extract patient information from clinical notes, retrieve relevant trials, assess eligibility, and rank matches."
     )
 
 
@@ -732,21 +569,8 @@ def run_pydantic_agent(
         max_date: date,
         phase: str,
 ) -> Dict[str, Any]:
-    """
-    Run the clinical trial matching pipeline using a Pydantic AI agent.
-
-    Args:
-        presentation: Clinical note text
-        llm_model: LLM model to use
-        recruiting_status: Trial recruiting status filter
-        min_date: Minimum trial date
-        max_date: Maximum trial date
-        phase: Trial phase filter
-
-    Returns:
-        Dictionary with the pipeline results in a backward-compatible format
-    """
-    # Create pipeline configuration
+    """Run the clinical trial matching pipeline using a Pydantic AI agent."""
+    # Create configuration
     config = PipelineConfig(
         clinical_note=presentation,
         llm_model=llm_model,
@@ -756,34 +580,27 @@ def run_pydantic_agent(
         phase=phase
     )
 
-    # Create and run the agent
+    # Setup and run agent
     agent = get_pipeline_agent(config.llm_model)
 
     try:
-        # Run the agent asynchronously
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        # No running event loop, create one
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # Get or create event loop
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
 
-    try:
-        # Run the pipeline
+        # Run pipeline
         logger.info("Running pipeline agent")
         result = loop.run_until_complete(
-            agent.run(
-                "Run the clinical trial matching pipeline for the given patient.",
-                deps=config
-            )
+            agent.run("Run the clinical trial matching pipeline for the given patient.", deps=config)
         )
 
-        # Convert to output format expected by the legacy code
-        if hasattr(result, 'output') and isinstance(result.output, PipelineResult):
-            pipeline_result = result.output
-        else:
-            pipeline_result = result
+        # Extract result
+        pipeline_result = result.output if hasattr(result, 'output') else result
 
-        # Use the shared response formatter
+        # Format for UI
         return format_response_for_ui(
             model_name=llm_model,
             patient_data=pipeline_result.patient_data,
@@ -795,7 +612,4 @@ def run_pydantic_agent(
 
     except Exception as e:
         logger.error(f"Pipeline execution failed: {str(e)}")
-        return {
-            "error": str(e),
-            "model": llm_model
-        }
+        return {"error": str(e), "model": llm_model}

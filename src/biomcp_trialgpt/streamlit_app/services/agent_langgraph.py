@@ -3,7 +3,8 @@ import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
-from typing import List, Dict, Any, Optional, Union, Annotated, TypedDict
+from functools import partial
+from typing import List, Dict, Any, Optional, Union, Annotated, TypedDict, Callable
 
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 # Import LangGraph components
@@ -33,18 +34,15 @@ class AgentState(TypedDict):
 
 def initialize_state(state: AgentState) -> AgentState:
     """Initialize the agent state with default values."""
-    messages = state.get("messages", [])
-    model_name = state.get("model_name", "gpt-4")
-
     return {
-        "messages": messages,
+        "messages": state.get("messages", []),
         "clinical_data": {},
         "retrieval_params": {},
         "trials": [],
         "eligibility_logs": {},
         "scoring_logs": {},
         "ranked_trials": [],
-        "model_name": model_name
+        "model_name": state.get("model_name", "gpt-4")
     }
 
 
@@ -56,14 +54,11 @@ def process_clinical_extraction(state: AgentState) -> AgentState:
     print(f"Extracting clinical data with model: {model_name}")
 
     try:
-        # Extract clinical data
         data, prompt, response = parse_clinical_note(presentation, model_name)
     except Exception as e:
-        # Handle potential errors in extraction
-        error_msg = str(e)
-        data = {"error": error_msg, "chief_complaint": "Error in extraction"}
-        prompt = f"Error occurred: {error_msg}"
-        response = f"Failed to extract with model {model_name}: {error_msg}"
+        data = {"error": str(e), "chief_complaint": "Error in extraction"}
+        prompt = f"Error occurred: {e}"
+        response = f"Failed to extract with model {model_name}: {e}"
 
     return {
         **state,
@@ -77,10 +72,8 @@ def process_clinical_extraction(state: AgentState) -> AgentState:
 def setup_trial_retrieval(state: AgentState) -> AgentState:
     """Set up parameters for trial retrieval."""
     clinical_data = state["clinical_data"]
-    params = state.get("retrieval_params", {})
 
-    if not params:
-        # Set defaults if not provided
+    if not state.get("retrieval_params"):
         current_year = datetime.now().year
         params = {
             "recruiting_status": "Recruiting",
@@ -91,6 +84,8 @@ def setup_trial_retrieval(state: AgentState) -> AgentState:
             "terms": clinical_data.get("terms", []),
             "interventions": clinical_data.get("interventions", []),
         }
+    else:
+        params = state["retrieval_params"]
 
     return {
         **state,
@@ -105,12 +100,10 @@ def retrieve_clinical_trials(state: AgentState) -> AgentState:
     """Retrieve clinical trials based on parameters."""
     params = state["retrieval_params"]
 
-    # Retrieve trials
-    client = BioMCPClient()
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        trials = loop.run_until_complete(client.retrieve_trials(**params))
+        trials = loop.run_until_complete(BioMCPClient().retrieve_trials(**params))
     finally:
         loop.close()
 
@@ -123,6 +116,30 @@ def retrieve_clinical_trials(state: AgentState) -> AgentState:
     }
 
 
+def _batch_process(items, process_fn, batch_size=10, max_workers=4, desc="Processing"):
+    """Generic batch processing utility."""
+    results = {}
+
+    for i in range(0, len(items), batch_size):
+        batch = items[i:i + batch_size]
+        print(f"{desc} batch {i // batch_size + 1}/{(len(items) + batch_size - 1) // batch_size}")
+
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(batch))) as executor:
+            futures = {}
+            for item in batch:
+                key = item.get("NCT Number") or item.get("nct_id", "")
+                futures[executor.submit(process_fn, item)] = key
+
+            for future in as_completed(futures):
+                key = futures[future]
+                try:
+                    results[key] = future.result()
+                except Exception as e:
+                    results[key] = {"error": str(e)}
+
+    return results
+
+
 def process_eligibility(state: AgentState) -> AgentState:
     """Process eligibility for all retrieved trials."""
     presentation = state["messages"][0].content
@@ -131,30 +148,22 @@ def process_eligibility(state: AgentState) -> AgentState:
 
     print(f"Checking eligibility with model: {model_name} for {len(trials)} trials")
 
-    # Process in smaller batches to reduce concurrent agent creation
-    batch_size = 10
-    max_workers = 4
-    eligibility_logs = {}
+    # Create a function that captures the presentation and model_name
+    process_trial = lambda trial: run_eligibility(presentation, trial, model_name)
 
-    for i in range(0, len(trials), batch_size):
-        batch = trials[i:i + batch_size]
-        print(f"Processing eligibility batch {i // batch_size + 1}/{(len(trials) + batch_size - 1) // batch_size}")
+    eligibility_logs = _batch_process(
+        trials,
+        process_trial,
+        desc="Processing eligibility"
+    )
 
-        with ThreadPoolExecutor(max_workers=min(max_workers, len(batch))) as executor:
-            futures = {}
-            for trial in batch:
-                nct_id = trial.get("NCT Number") or trial.get("nct_id", "")
-                futures[executor.submit(run_eligibility, presentation, trial, model_name)] = nct_id
-
-            for future in as_completed(futures):
-                nct_id = futures[future]
-                try:
-                    eligibility_logs[nct_id] = future.result()
-                except Exception as e:
-                    eligibility_logs[nct_id] = {
-                        "inclusion": ("", f"Error: {e}"),
-                        "exclusion": ("", f"Error: {e}"),
-                    }
+    # Handle any errors and ensure consistent format
+    for nct_id, result in eligibility_logs.items():
+        if "error" in result:
+            eligibility_logs[nct_id] = {
+                "inclusion": ("", f"Error: {result['error']}"),
+                "exclusion": ("", f"Error: {result['error']}"),
+            }
 
     return {
         **state,
@@ -177,51 +186,40 @@ def process_scoring(state: AgentState) -> AgentState:
     # Get only trials with eligibility data
     eligible_trials = [t for t in trials if (t.get("NCT Number") or t.get("nct_id", "")) in eligibility_logs]
 
-    # Process in smaller batches
-    batch_size = 10
-    max_workers = 4  # Reduced from 3 to 2
-    scoring_logs = {}
+    # Define scoring function
+    def score_single_trial(trial):
+        nct_id = trial.get("NCT Number") or trial.get("nct_id", "")
+        inc_p, inc_r = eligibility_logs[nct_id]["inclusion"]
+        exc_p, exc_r = eligibility_logs[nct_id]["exclusion"]
+        pred_str = f"Inclusion predictions:\n{inc_r}\nExclusion predictions:\n{exc_r}"
 
-    for i in range(0, len(eligible_trials), batch_size):
-        batch = eligible_trials[i:i + batch_size]
-        print(f"Processing scoring batch {i // batch_size + 1}/{(len(eligible_trials) + batch_size - 1) // batch_size}")
+        try:
+            _, score_resp = run_scoring(presentation, trial, pred_str, model_name)
+            try:
+                json_match = re.search(r'(\{.*\})', score_resp, re.DOTALL)
+                return json.loads(json_match.group(1) if json_match else score_resp)
+            except:
+                return {
+                    "relevance_explanation": "Error parsing response",
+                    "relevance_score_R": 0,
+                    "eligibility_explanation": "Error parsing response",
+                    "eligibility_score_E": 0,
+                }
+        except Exception as e:
+            return {
+                "relevance_explanation": f"Error: {e}",
+                "relevance_score_R": 0,
+                "eligibility_explanation": f"Error: {e}",
+                "eligibility_score_E": 0
+            }
 
-        with ThreadPoolExecutor(max_workers=min(max_workers, len(batch))) as executor:
-            futures = {}
-
-            for trial in batch:
-                nct_id = trial.get("NCT Number") or trial.get("nct_id", "")
-                if nct_id not in eligibility_logs:
-                    continue
-
-                inc_p, inc_r = eligibility_logs[nct_id]["inclusion"]
-                exc_p, exc_r = eligibility_logs[nct_id]["exclusion"]
-                pred_str = f"Inclusion predictions:\n{inc_r}\nExclusion predictions:\n{exc_r}"
-
-                futures[executor.submit(run_scoring, presentation, trial, pred_str, model_name)] = nct_id
-
-            for future in as_completed(futures):
-                nct_id = futures[future]
-                try:
-                    _, score_resp = future.result()
-                    try:
-                        json_match = re.search(r'(\{.*\})', score_resp, re.DOTALL)
-                        data = json.loads(json_match.group(1) if json_match else score_resp)
-                    except:
-                        data = {
-                            "relevance_explanation": "Error parsing response",
-                            "relevance_score_R": 0,
-                            "eligibility_explanation": "Error parsing response",
-                            "eligibility_score_E": 0,
-                        }
-                    scoring_logs[nct_id] = data
-                except Exception as e:
-                    scoring_logs[nct_id] = {
-                        "relevance_explanation": f"Error: {e}",
-                        "relevance_score_R": 0,
-                        "eligibility_explanation": f"Error: {e}",
-                        "eligibility_score_E": 0
-                    }
+    # Process in batches
+    scoring_logs = _batch_process(
+        eligible_trials,
+        score_single_trial,
+        desc="Processing scoring",
+        max_workers=3
+    )
 
     # Rank trials
     ranked_trials = sorted(
@@ -242,31 +240,27 @@ def process_scoring(state: AgentState) -> AgentState:
 
 def format_final_result(state: AgentState) -> AgentState:
     """Format the final result with top ranked trials."""
-    ranked_trials = state["ranked_trials"]
+    ranked_trials = state["ranked_trials"][:min(5, len(state["ranked_trials"]))]
     trials = state["trials"]
+    trial_map = {t.get("NCT Number") or t.get("nct_id", ""): t for t in trials}
 
-    # Get top 5 trials
-    top_trials = ranked_trials[:min(5, len(ranked_trials))]
+    result_parts = ["Top ranked clinical trials:\n\n"]
 
-    result_str = "Top ranked clinical trials:\n\n"
+    for i, (nct_id, data) in enumerate(ranked_trials, 1):
+        trial_info = trial_map.get(nct_id, {"Title": "Unknown", "Brief Summary": "No summary available"})
+        summary = trial_info.get("Brief Summary", "No summary available")[:200] + "..."
 
-    for i, (nct_id, data) in enumerate(top_trials, 1):
-        trial_info = next(
-            (t for t in trials if t.get("NCT Number") == nct_id or t.get("nct_id") == nct_id),
-            {"Title": "Unknown", "Brief Summary": "No summary available"}
+        result_parts.append(
+            f"{i}. NCT ID: {nct_id}\n"
+            f"   Title: {trial_info.get('Title', 'Unknown')}\n"
+            f"   Eligibility Score: {data.get('eligibility_score_E', 0)}\n"
+            f"   Relevance Score: {data.get('relevance_score_R', 0)}\n"
+            f"   Summary: {summary}\n\n"
         )
-
-        result_str += f"{i}. NCT ID: {nct_id}\n"
-        result_str += f"   Title: {trial_info.get('Title', 'Unknown')}\n"
-        result_str += f"   Eligibility Score: {data.get('eligibility_score_E', 0)}\n"
-        result_str += f"   Relevance Score: {data.get('relevance_score_R', 0)}\n"
-        result_str += f"   Summary: {trial_info.get('Brief Summary', 'No summary available')[:200]}...\n\n"
 
     return {
         **state,
-        "messages": state["messages"] + [
-            AIMessage(content=result_str)
-        ]
+        "messages": state["messages"] + [AIMessage(content="".join(result_parts))]
     }
 
 
@@ -286,7 +280,7 @@ def run_langgraph_agent(
     min_date_str = _format_date(min_date, "2018-01-01")
     max_date_str = _format_date(max_date, f"{datetime.now().year + 1}-12-31")
 
-    # Create initial state with model name directly in state
+    # Create initial state
     initial_state = {
         "messages": [HumanMessage(content=presentation)],
         "clinical_data": {},
@@ -303,24 +297,17 @@ def run_langgraph_agent(
         "model_name": llm_model
     }
 
-    # Build and run graph
+    # Execute workflow
     workflow = _build_workflow_graph()
-
-    # Execute with tracing if debug mode is enabled
     if debug_mode:
         from langgraph.trace import trace
         with trace(workflow) as tracer:
             result = workflow.invoke(initial_state)
             trace_events = tracer.get_events()
-            return {
-                "result": result,
-                "trace": trace_events
-            }
+            return {"result": result, "trace": trace_events}
 
-    # Standard execution
+    # Standard execution with formatted response
     result = workflow.invoke(initial_state)
-
-    # Use the shared response formatter
     return format_response_for_ui(
         clinical_data=result.get("clinical_data", {}),
         retrieval_params=result.get("retrieval_params", {}),
@@ -344,26 +331,28 @@ def _format_date(date_input, default):
 
 def _build_workflow_graph():
     """Build and return the workflow graph."""
-    graph_builder = StateGraph(AgentState)
+    graph = StateGraph(AgentState)
 
-    # Add nodes
-    graph_builder.add_node("initialize", initialize_state)
-    graph_builder.add_node("extract_clinical_data", process_clinical_extraction)
-    graph_builder.add_node("setup_retrieval", setup_trial_retrieval)
-    graph_builder.add_node("retrieve_trials", retrieve_clinical_trials)
-    graph_builder.add_node("check_eligibility", process_eligibility)
-    graph_builder.add_node("score_trials", process_scoring)
-    graph_builder.add_node("format_result", format_final_result)
+    # Add nodes and edges in one concise section
+    nodes = {
+        "initialize": initialize_state,
+        "extract_clinical_data": process_clinical_extraction,
+        "setup_retrieval": setup_trial_retrieval,
+        "retrieve_trials": retrieve_clinical_trials,
+        "check_eligibility": process_eligibility,
+        "score_trials": process_scoring,
+        "format_result": format_final_result
+    }
 
-    # Define edges
-    graph_builder.set_entry_point("initialize")
-    graph_builder.add_edge("initialize", "extract_clinical_data")
-    graph_builder.add_edge("extract_clinical_data", "setup_retrieval")
-    graph_builder.add_edge("setup_retrieval", "retrieve_trials")
-    graph_builder.add_edge("retrieve_trials", "check_eligibility")
-    graph_builder.add_edge("check_eligibility", "score_trials")
-    graph_builder.add_edge("score_trials", "format_result")
-    graph_builder.add_edge("format_result", END)
+    # Add all nodes
+    for name, func in nodes.items():
+        graph.add_node(name, func)
 
-    # Compile and return
-    return graph_builder.compile()
+    # Define edges (flow)
+    graph.set_entry_point("initialize")
+    for i, (name, _) in enumerate(list(nodes.items())[:-1]):
+        next_node = list(nodes.items())[i + 1][0]
+        graph.add_edge(name, next_node)
+    graph.add_edge("format_result", END)
+
+    return graph.compile()

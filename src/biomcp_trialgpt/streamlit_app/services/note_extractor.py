@@ -4,7 +4,6 @@ import os
 import sys
 
 import anthropic
-import openai
 
 try:
     from google import genai
@@ -23,14 +22,13 @@ logger = logging.getLogger(__name__)
 _api_key = os.getenv("OPENAI_API_KEY")
 if not _api_key:
     raise ValueError("OPENAI_API_KEY environment variable is not set")
-openai.api_key = _api_key
 
 # Configure Anthropic
 _anthropic_key = os.getenv("ANTHROPIC_API_KEY")
 if not _anthropic_key:
     raise ValueError("ANTHROPIC_API_KEY environment variable is not set")
-anthropic.api_key = _anthropic_key
-anthropic_client = anthropic.Client()
+
+anthropic_client = anthropic.Anthropic(api_key=_anthropic_key)
 
 # Load Google API key
 _google_key = os.getenv("GOOGLE_API_KEY")
@@ -65,25 +63,28 @@ Output ONLY valid JSON.
 
 def _get_extraction_response(presentation: str, model: str, prompt: str) -> str:
     # Route to the appropriate API based on selected model
-    if model.startswith("gpt-"):
+    if "gpt-" in model:
         resp = _create_chat_completion(
-            model=model,
+            model=model.split("gpt-")[1],
             messages=[
                 {"role": "system", "content": EXTRACTION_SYSTEM},
                 {"role": "user", "content": prompt},
             ],
-            temperature=0.0,
+            temperature=1,
         )
         return resp.choices[0].message.content.strip()
-    elif model.startswith("anthropic-"):
+    elif "anthropic" in model:
         from anthropic import HUMAN_PROMPT, AI_PROMPT
         human_prompt = HUMAN_PROMPT + prompt + AI_PROMPT
-        response = anthropic_client.completions.create(
-            model=model.split("anthropic-")[1],
-            prompt=human_prompt,
-            max_tokens_to_sample=1000,
+        response = anthropic_client.messages.create(
+            model=model.split("anthropic-")[1] if model.startswith("anthropic-") else model.replace('anthropic:', ''),
+            max_tokens=1000,
+            temperature=0.7,
+            messages=[
+                {"role": "user", "content": human_prompt}
+            ]
         )
-        return response.completion.strip()
+        return response.content[0].text.strip()
     elif model.startswith("google-"):
         # Google Gemini via google.generativeai or google-genai SDK
         model_name = model.split("google-")[1].replace('gla:', '')

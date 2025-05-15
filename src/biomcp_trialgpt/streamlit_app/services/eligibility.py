@@ -97,22 +97,26 @@ def build_eligibility_prompt(presentation: str, trial_info: Dict[str, Any], inc_
 def _call_llm(prompt: str, model: str) -> str:
     # OpenAI
     logger.info(f"Creating agent with model: {model}")
-    if model.startswith("gpt-"):
+    if "gpt-" in model:
         resp = _create_chat_completion(
-            model=model,
+            model=model.split("gpt-")[1],
             messages=[{"role": "system", "content": ""}, {"role": "user", "content": prompt}],
-            temperature=0.0,
+            temperature=1,
         )
         return resp.choices[0].message.content.strip()
     # Anthropic
-    if model.startswith("anthropic-"):
+    if "anthropic" in model:
+        from anthropic import HUMAN_PROMPT, AI_PROMPT
         human_prompt = HUMAN_PROMPT + prompt + AI_PROMPT
-        response = anthropic_client.completions.create(
-            model=model.split("anthropic-")[1],
-            prompt=human_prompt,
-            max_tokens_to_sample=1000,
+        response = anthropic_client.messages.create(
+            model=model.split("anthropic-")[1] if model.startswith("anthropic-") else model.replace('anthropic:', ''),
+            max_tokens=1000,
+            temperature=0.7,
+            messages=[
+                {"role": "user", "content": human_prompt}
+            ]
         )
-        return response.completion.strip()
+        return response.content[0].text.strip()
     # Google
     if model.startswith("google-"):
         model_name = model.split("google-")[1].replace('gla:', '')
