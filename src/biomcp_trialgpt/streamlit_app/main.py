@@ -1,12 +1,11 @@
-import streamlit as st
-import os
-import json
 import time
+import traceback
+from typing import Dict, Any
+
+import streamlit as st
+
 from biomcp_trialgpt.streamlit_app.components import input_form
 from biomcp_trialgpt.streamlit_app.components.framework_selector import framework_selector
-from typing import Dict, Any, Callable, Optional, List, Tuple
-import datetime
-import traceback
 
 # Set page configuration
 st.set_page_config(page_title="BioMCP Trial Matching", layout="wide")
@@ -96,9 +95,7 @@ def run_workflow(agent_function, presentation, llm_model, recruiting_status, min
         with st.spinner("Running full workflow pipeline..."):
             # Run the agent with all steps
             results = agent_function(
-                presentation, llm_model, recruiting_status, min_date, max_date, phase,
-                step="all"
-            )
+                presentation, llm_model, recruiting_status, min_date, max_date, phase)
 
             print("Workflow completed, results received:")
             print_output("Results", results)
@@ -482,15 +479,6 @@ def main():
         reset_workflow()
         st.session_state.run_id = current_run_id
 
-    # Display session state for debugging
-    # st.sidebar.write("Session State:")
-    # st.sidebar.json({
-    #     "workflow_complete": st.session_state.workflow_complete,
-    #     "is_running": st.session_state.is_running,
-    #     "submitted": st.session_state.submitted,
-    #     "run_id": st.session_state.run_id[:20] + "..." if st.session_state.run_id else None
-    # })
-
     # Create expanders with the session state expanded values
     step1_expander = st.expander("Step 1: Clinical Note Extraction", expanded=st.session_state.step1_expanded)
     step2_expander = st.expander("Step 2: Trial Retrieval", expanded=st.session_state.step2_expanded)
@@ -539,11 +527,6 @@ def main():
 
         # Display the ranked trials outside the expanders
         display_ranked_trials(results)
-
-    # Reset button in the sidebar
-    # if st.sidebar.button("Reset Workflow", key="reset_workflow"):
-    #     reset_workflow()
-    #     st.rerun()  # Force a rerun to ensure all state is reset
 
 
 if __name__ == "__main__":

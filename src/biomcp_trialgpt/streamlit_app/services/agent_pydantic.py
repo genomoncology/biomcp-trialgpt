@@ -1,11 +1,12 @@
-from typing import Dict, Any, List, Optional, Union, Tuple
-from datetime import date, datetime
-from pydantic import BaseModel, Field, model_validator, field_validator
-from pydantic_ai import Agent, RunContext
+import asyncio
 import json
 import logging
-import asyncio
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime
+from typing import Dict, Any, List, Optional, Union
+
+from pydantic import BaseModel, Field, model_validator, field_validator
+from pydantic_ai import Agent, RunContext
 
 # Configure logging
 logging.basicConfig(
@@ -19,6 +20,7 @@ from .biomcp_client import BioMCPClient
 from .note_extractor import parse_clinical_note
 from .eligibility import run_eligibility
 from .scoring import run_scoring
+from .response_formatter import format_response_for_ui
 
 
 #######################
@@ -729,11 +731,6 @@ def run_pydantic_agent(
         min_date: date,
         max_date: date,
         phase: str,
-        step: str = "all",  # Kept for backward compatibility
-        step1_data=None,  # Unused in this refactored version
-        step2_data=None,  # Unused in this refactored version
-        step3_data=None,  # Unused in this refactored version
-        step4_data=None  # Unused in this refactored version
 ) -> Dict[str, Any]:
     """
     Run the clinical trial matching pipeline using a Pydantic AI agent.
@@ -786,61 +783,15 @@ def run_pydantic_agent(
         else:
             pipeline_result = result
 
-        # Format into legacy output format
-        return {
-            "step1": {
-                "data": pipeline_result.patient_data.model_dump(exclude_none=True)
-                if pipeline_result.patient_data else {}
-            },
-            "step2": {
-                "params": {
-                    "recruiting_status": config.recruiting_status,
-                    "min_date": config.min_date,
-                    "max_date": config.max_date,
-                    "phase": config.phase,
-                    "conditions": pipeline_result.patient_data.conditions if pipeline_result.patient_data else [],
-                    "terms": pipeline_result.patient_data.terms if pipeline_result.patient_data else [],
-                    "interventions": pipeline_result.patient_data.interventions if pipeline_result.patient_data else []
-                },
-                "response": [
-                    trial.model_dump(exclude_none=True)
-                    for trial in pipeline_result.retrieved_trials
-                ]
-            },
-            "step3": {
-                "results": [
-                    {
-                        "trial_id": result.trial_id,
-                        "eligibility": {
-                            "inclusion": (result.inclusion_decision, result.inclusion_explanation),
-                            "exclusion": (result.exclusion_decision, result.exclusion_explanation)
-                        }
-                    }
-                    for result in pipeline_result.eligibility_results
-                ]
-            },
-            "step4": {
-                "scoring_logs": {
-                    result.trial_id: {
-                        "relevance_explanation": result.relevance_explanation,
-                        "relevance_score_R": result.relevance_score,
-                        "eligibility_explanation": result.eligibility_explanation,
-                        "eligibility_score_E": result.eligibility_score
-                    }
-                    for result in pipeline_result.scoring_results
-                },
-                "ranked": [
-                    {
-                        "trial_id": trial.trial_id,
-                        "relevance_explanation": trial.relevance_explanation,
-                        "relevance_score_R": trial.relevance_score,
-                        "eligibility_explanation": trial.eligibility_explanation,
-                        "eligibility_score_E": trial.eligibility_score
-                    }
-                    for trial in pipeline_result.ranked_trials
-                ]
-            }
-        }
+        # Use the shared response formatter
+        return format_response_for_ui(
+            model_name=llm_model,
+            patient_data=pipeline_result.patient_data,
+            retrieved_trials=pipeline_result.retrieved_trials,
+            eligibility_results=pipeline_result.eligibility_results,
+            scoring_results=pipeline_result.scoring_results,
+            config=config
+        )
 
     except Exception as e:
         logger.error(f"Pipeline execution failed: {str(e)}")

@@ -1,19 +1,20 @@
-from typing import List, Dict, Any, Optional, Union, Annotated, TypedDict
-from datetime import date, datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import json
 import asyncio
+import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date, datetime
+from typing import List, Dict, Any, Optional, Union, Annotated, TypedDict
 
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 # Import LangGraph components
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 
 # Import original components
 from .biomcp_client import BioMCPClient
-from .note_extractor import parse_clinical_note
 from .eligibility import run_eligibility
+from .note_extractor import parse_clinical_note
+from .response_formatter import format_response_for_ui
 from .scoring import run_scoring
 
 
@@ -131,8 +132,8 @@ def process_eligibility(state: AgentState) -> AgentState:
     print(f"Checking eligibility with model: {model_name} for {len(trials)} trials")
 
     # Process in smaller batches to reduce concurrent agent creation
-    batch_size = 5
-    max_workers = 3
+    batch_size = 10
+    max_workers = 4
     eligibility_logs = {}
 
     for i in range(0, len(trials), batch_size):
@@ -177,8 +178,8 @@ def process_scoring(state: AgentState) -> AgentState:
     eligible_trials = [t for t in trials if (t.get("NCT Number") or t.get("nct_id", "")) in eligibility_logs]
 
     # Process in smaller batches
-    batch_size = 5
-    max_workers = 2  # Reduced from 3 to 2
+    batch_size = 10
+    max_workers = 4  # Reduced from 3 to 2
     scoring_logs = {}
 
     for i in range(0, len(eligible_trials), batch_size):
@@ -277,7 +278,6 @@ def run_langgraph_agent(
         max_date: Optional[Union[date, int]] = None,
         phase: str = "Phase 1|Phase 2|Phase 3",
         debug_mode: bool = False,
-        step: str = ""
 ) -> Dict[str, Any]:
     """Run the LangGraph agent pipeline for clinical trial matching."""
     print(f"Starting workflow with model: {llm_model}")
@@ -312,15 +312,24 @@ def run_langgraph_agent(
         with trace(workflow) as tracer:
             result = workflow.invoke(initial_state)
             trace_events = tracer.get_events()
-            trace_data = {
+            return {
                 "result": result,
                 "trace": trace_events
             }
-            return _format_output_for_ui(trace_data)
 
     # Standard execution
     result = workflow.invoke(initial_state)
-    return _format_output_for_ui(result)
+
+    # Use the shared response formatter
+    return format_response_for_ui(
+        clinical_data=result.get("clinical_data", {}),
+        retrieval_params=result.get("retrieval_params", {}),
+        trials=result.get("trials", []),
+        eligibility_logs=result.get("eligibility_logs", {}),
+        scoring_logs=result.get("scoring_logs", {}),
+        ranked_trials=result.get("ranked_trials", []),
+        model_name=result.get("model_name", llm_model)
+    )
 
 
 def _format_date(date_input, default):
@@ -358,38 +367,3 @@ def _build_workflow_graph():
 
     # Compile and return
     return graph_builder.compile()
-
-
-def _format_output_for_ui(workflow_result: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Format the workflow result to match the expected structure for the UI.
-
-    Args:
-        workflow_result: The raw result from the workflow
-
-    Returns:
-        A dictionary formatted for the UI with step1, step2, step3, and step4 keys
-    """
-    # If it's a debug trace result, unwrap the actual result
-    if isinstance(workflow_result, dict) and 'result' in workflow_result and 'trace' in workflow_result:
-        workflow_result = workflow_result['result']
-
-    result = {
-        "step1": {
-            "model": workflow_result.get("model_name", ""),
-            "data": workflow_result.get("clinical_data", {})
-        },
-        "step2": {
-            "params": workflow_result.get("retrieval_params", {}),
-            "response": workflow_result.get("trials", [])
-        },
-        "step3": workflow_result.get("eligibility_logs", {}),
-        "step4": {
-            "scoring_logs": workflow_result.get("scoring_logs", {}),
-            "ranked": [
-                (nct_id, data) for nct_id, data in workflow_result.get("ranked_trials", [])
-            ]
-        }
-    }
-
-    return result
