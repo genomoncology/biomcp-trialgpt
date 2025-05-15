@@ -1,5 +1,7 @@
-import streamlit as st
 from typing import List
+
+import streamlit as st
+
 
 def display_results(results: List[dict], framework: str):
     st.header(f"Results from {framework} agent")

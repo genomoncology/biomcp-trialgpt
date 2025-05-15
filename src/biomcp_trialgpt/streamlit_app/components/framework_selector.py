@@ -1,5 +1,7 @@
-import streamlit as st
 from typing import List, Optional
+
+import streamlit as st
+
 
 def framework_selector(available_options: Optional[List[str]] = None):
     """
@@ -17,11 +19,11 @@ def framework_selector(available_options: Optional[List[str]] = None):
         "pydantic",
         "langgraph",
     ]
-    
+
     options = available_options if available_options else default_options
-    
+
     if not options:
         st.sidebar.error("No frameworks available. Please check your API keys.")
         return None
-        
+
     return st.sidebar.radio("Select Framework", options)

@@ -1,5 +1,6 @@
 import streamlit as st
 
+
 def patient_input_form():
     st.sidebar.subheader("Patient Presentation")
     presentation = st.sidebar.text_area(
