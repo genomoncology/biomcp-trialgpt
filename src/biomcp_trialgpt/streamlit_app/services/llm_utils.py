@@ -1,4 +1,5 @@
 import os
+
 import openai
 
 # Configure API key for OpenAI

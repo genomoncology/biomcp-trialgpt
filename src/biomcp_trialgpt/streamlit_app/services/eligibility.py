@@ -1,10 +1,6 @@
 import json
-import os
 import logging
 from typing import Dict, Any, Tuple
-
-import openai
-import anthropic
 
 # Google Generative AI SDK import
 try:

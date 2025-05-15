@@ -1,8 +1,9 @@
-from typing import List, Dict
-import asyncio
 import json
 from datetime import date
+from typing import List, Dict
+
 from biomcp.trials.search import TrialQuery, search_trials, RecruitingStatus, TrialPhase
+
 
 class BioMCPClient:
     """Wrapper for BioMCP trial retrieval."""
