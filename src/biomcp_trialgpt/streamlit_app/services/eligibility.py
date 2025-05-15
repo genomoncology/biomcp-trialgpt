@@ -1,5 +1,6 @@
 import json
 import os
+import logging
 from typing import Dict, Any, Tuple
 
 import openai
@@ -15,6 +16,12 @@ except ImportError:
 from biomcp_trialgpt.streamlit_app.services.note_extractor import anthropic_client, _google_key
 from .llm_utils import create_chat_completion as _create_chat_completion
 from anthropic import HUMAN_PROMPT, AI_PROMPT
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Configure Google SDK if available
 if hasattr(genai, 'configure'):
@@ -93,6 +100,7 @@ def build_eligibility_prompt(presentation: str, trial_info: Dict[str, Any], inc_
 
 def _call_llm(prompt: str, model: str) -> str:
     # OpenAI
+    logger.info(f"Creating agent with model: {model}")
     if model.startswith("gpt-"):
         resp = _create_chat_completion(
             model=model,
@@ -111,7 +119,7 @@ def _call_llm(prompt: str, model: str) -> str:
         return response.completion.strip()
     # Google
     if model.startswith("google-"):
-        model_name = model.split("google-")[1]
+        model_name = model.split("google-")[1].replace('gla:', '')
         if hasattr(genai, 'chat'):
             resp = genai.chat.completions.create(
                 model=model_name,

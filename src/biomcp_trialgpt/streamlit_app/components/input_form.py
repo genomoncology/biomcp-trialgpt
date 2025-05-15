@@ -7,7 +7,7 @@ def patient_input_form():
     )
     llm_model = st.sidebar.selectbox(
         "Extraction Model", [
-            "google-gemini-2.5-pro-preview-03-25", "gpt-3.5-turbo", "gpt-4", "anthropic-claude-3"
+            "google-gemini-2.5-pro-preview-03-25", "gpt-3.5-turbo-0125", "gpt-4-0125-preview", "anthropic-claude-3"
         ]
     )
     # Trial filter controls

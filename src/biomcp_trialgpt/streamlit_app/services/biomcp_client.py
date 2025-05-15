@@ -10,7 +10,7 @@ class BioMCPClient:
         # Initialize BioMCP client, authentication, etc.
         pass
 
-    def retrieve_trials(self,
+    async def retrieve_trials(self,
                         conditions: List[str],
                         terms: List[str],
                         interventions: List[str],
@@ -50,5 +50,5 @@ class BioMCPClient:
                 query_args["max_date"] = max_date
 
         # Execute async search and parse JSON
-        json_str = asyncio.run(search_trials(TrialQuery(**query_args), output_json=True))
+        json_str = await search_trials(TrialQuery(**query_args), output_json=True)
         return json.loads(json_str)

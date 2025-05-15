@@ -15,7 +15,6 @@ def framework_selector(available_options: Optional[List[str]] = None):
     st.sidebar.subheader("Agent Framework")
     default_options = [
         "pydantic",
-        "openai",
         "langgraph",
     ]
     

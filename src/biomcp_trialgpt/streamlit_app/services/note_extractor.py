@@ -1,14 +1,23 @@
 import os
 import json
+import sys
+
 import openai
 import anthropic
+import logging
+
 try:
     from google import genai
 except ImportError:
     import google.generativeai as genai
 from typing import Dict, Any, Tuple
-from openai.error import RateLimitError
 from .llm_utils import create_chat_completion as _create_chat_completion
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Configure API key (in case not already set)
 _api_key = os.getenv("OPENAI_API_KEY")
@@ -53,6 +62,7 @@ Extract from the free-text patient note exactly these JSON fields:
 Output ONLY valid JSON.
 """
 
+
 def _get_extraction_response(presentation: str, model: str, prompt: str) -> str:
     # Route to the appropriate API based on selected model
     if model.startswith("gpt-"):
@@ -76,7 +86,7 @@ def _get_extraction_response(presentation: str, model: str, prompt: str) -> str:
         return response.completion.strip()
     elif model.startswith("google-"):
         # Google Gemini via google.generativeai or google-genai SDK
-        model_name = model.split("google-")[1]
+        model_name = model.split("google-")[1].replace('gla:', '')
         # If using google.generativeai
         if hasattr(genai, 'chat'):
             resp = genai.chat.completions.create(
@@ -96,9 +106,11 @@ def _get_extraction_response(presentation: str, model: str, prompt: str) -> str:
     else:
         raise ValueError(f"Unsupported model: {model}")
 
+
 def parse_clinical_note(presentation: str, model: str) -> Tuple[Dict[str, Any], str, str]:
     prompt = f"""{EXTRACTION_SYSTEM}\n\nNote:\n\"\"\"\n{presentation}\n\"\"\"\n"""
     try:
+        logger.info(f"Using model {model} for parsing clinical note")
         resp_content = _get_extraction_response(presentation, model, prompt)
         try:
             data = json.loads(resp_content)
@@ -112,7 +124,7 @@ def parse_clinical_note(presentation: str, model: str) -> Tuple[Dict[str, Any], 
             if "{" in clean and "}" in clean:
                 start = clean.find("{")
                 end = clean.rfind("}")
-                clean = clean[start:end+1]
+                clean = clean[start:end + 1]
             try:
                 data = json.loads(clean)
             except json.JSONDecodeError:
@@ -120,5 +132,6 @@ def parse_clinical_note(presentation: str, model: str) -> Tuple[Dict[str, Any], 
         return data, prompt, resp_content
     except Exception as e:
         data = {"chief_complaint": presentation, "error": str(e)}
+        logger.info(e.with_traceback(sys.exc_info()[2]))
         resp_content = json.dumps(data)
         return data, prompt, resp_content
