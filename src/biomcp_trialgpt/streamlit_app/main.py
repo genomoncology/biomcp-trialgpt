@@ -483,13 +483,13 @@ def main():
         st.session_state.run_id = current_run_id
 
     # Display session state for debugging
-    st.sidebar.write("Session State:")
-    st.sidebar.json({
-        "workflow_complete": st.session_state.workflow_complete,
-        "is_running": st.session_state.is_running,
-        "submitted": st.session_state.submitted,
-        "run_id": st.session_state.run_id[:20] + "..." if st.session_state.run_id else None
-    })
+    # st.sidebar.write("Session State:")
+    # st.sidebar.json({
+    #     "workflow_complete": st.session_state.workflow_complete,
+    #     "is_running": st.session_state.is_running,
+    #     "submitted": st.session_state.submitted,
+    #     "run_id": st.session_state.run_id[:20] + "..." if st.session_state.run_id else None
+    # })
 
     # Create expanders with the session state expanded values
     step1_expander = st.expander("Step 1: Clinical Note Extraction", expanded=st.session_state.step1_expanded)
@@ -541,9 +541,9 @@ def main():
         display_ranked_trials(results)
 
     # Reset button in the sidebar
-    if st.sidebar.button("Reset Workflow", key="reset_workflow"):
-        reset_workflow()
-        st.rerun()  # Force a rerun to ensure all state is reset
+    # if st.sidebar.button("Reset Workflow", key="reset_workflow"):
+    #     reset_workflow()
+    #     st.rerun()  # Force a rerun to ensure all state is reset
 
 
 if __name__ == "__main__":
