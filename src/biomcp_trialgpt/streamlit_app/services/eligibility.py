@@ -66,22 +66,22 @@ def build_eligibility_prompt(presentation: str, trial_info: Dict[str, Any], inc_
     )
     if inc_exc == "inclusion":
         prompt += (
-            'the label must be chosen from {"not applicable", "not enough information", "included", "not included"}. '  
-            '"not applicable" should only be used for criteria that are not applicable to the patient. '  
-            '"not enough information" should be used where the patient note does not contain sufficient '  
-            'information for making the classification. Try to use as less "not enough information" as '  
-            'possible because if the note does not mention a medically important fact, you can assume '  
-            'that the fact is not true for the patient. "included" denotes that the patient meets the '  
+            'the label must be chosen from {"not applicable", "not enough information", "included", "not included"}. '
+            '"not applicable" should only be used for criteria that are not applicable to the patient. '
+            '"not enough information" should be used where the patient note does not contain sufficient '
+            'information for making the classification. Try to use as less "not enough information" as '
+            'possible because if the note does not mention a medically important fact, you can assume '
+            'that the fact is not true for the patient. "included" denotes that the patient meets the '
             'inclusion criterion, while "not included" means the reverse.\n'
         )
     else:
         prompt += (
-            'the label must be chosen from {"not applicable", "not enough information", "excluded", "not excluded"}. '  
-            '"not applicable" should only be used for criteria that are not applicable to the patient. '  
-            '"not enough information" should be used where the patient note does not contain sufficient '  
-            'information for making the classification. Try to use as less "not enough information" as '  
-            'possible because if the note does not mention a medically important fact, you can assume '  
-            'that the fact is not true for the patient. "excluded" denotes that the patient meets the '  
+            'the label must be chosen from {"not applicable", "not enough information", "excluded", "not excluded"}. '
+            '"not applicable" should only be used for criteria that are not applicable to the patient. '
+            '"not enough information" should be used where the patient note does not contain sufficient '
+            'information for making the classification. Try to use as less "not enough information" as '
+            'possible because if the note does not mention a medically important fact, you can assume '
+            'that the fact is not true for the patient. "excluded" denotes that the patient meets the '
             'exclusion criterion and should be excluded in the trial, while "not excluded" means the reverse.\n'
         )
     prompt += (

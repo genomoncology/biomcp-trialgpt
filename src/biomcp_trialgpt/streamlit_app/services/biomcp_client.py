@@ -7,18 +7,19 @@ from biomcp.trials.search import TrialQuery, search_trials, RecruitingStatus, Tr
 
 class BioMCPClient:
     """Wrapper for BioMCP trial retrieval."""
+
     def __init__(self):
         # Initialize BioMCP client, authentication, etc.
         pass
 
     async def retrieve_trials(self,
-                        conditions: List[str],
-                        terms: List[str],
-                        interventions: List[str],
-                        recruiting_status: str = None,
-                        min_date: date = None,
-                        max_date: date = None,
-                        phase: str = None) -> List[Dict]:
+                              conditions: List[str],
+                              terms: List[str],
+                              interventions: List[str],
+                              recruiting_status: str = None,
+                              min_date: date = None,
+                              max_date: date = None,
+                              phase: str = None) -> List[Dict]:
         """
         Retrieve trials matching the condition, age, and gender.
 
