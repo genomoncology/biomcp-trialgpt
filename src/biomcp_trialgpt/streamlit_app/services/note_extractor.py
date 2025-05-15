@@ -31,9 +31,9 @@ if not _anthropic_key:
 anthropic_client = anthropic.Anthropic(api_key=_anthropic_key)
 
 # Load Google API key
-_google_key = os.getenv("GOOGLE_API_KEY")
+_google_key = os.getenv("GEMINI_API_KEY")
 if not _google_key:
-    raise ValueError("GOOGLE_API_KEY environment variable is not set")
+    raise ValueError("GEMINI_API_KEY environment variable is not set")
 # Configure for google.generativeai if available
 if hasattr(genai, 'configure'):
     genai.configure(api_key=_google_key)

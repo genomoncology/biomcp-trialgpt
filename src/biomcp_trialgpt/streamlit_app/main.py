@@ -16,7 +16,7 @@ try:
 
     pydantic_available = True
 except ValueError as e:
-    if "OPENAI_API_KEY" in str(e) or "ANTHROPIC_API_KEY" in str(e) or "GOOGLE_API_KEY" in str(e):
+    if "OPENAI_API_KEY" in str(e) or "ANTHROPIC_API_KEY" in str(e) or "GEMINI_API_KEY" in str(e):
         pydantic_available = False
     else:
         raise
@@ -26,7 +26,7 @@ try:
 
     langgraph_available = True
 except ValueError as e:
-    if "OPENAI_API_KEY" in str(e) or "ANTHROPIC_API_KEY" in str(e) or "GOOGLE_API_KEY" in str(e):
+    if "OPENAI_API_KEY" in str(e) or "ANTHROPIC_API_KEY" in str(e) or "GEMINI_API_KEY" in str(e):
         langgraph_available = False
     else:
         raise
@@ -59,6 +59,7 @@ def reset_workflow():
     print("Resetting workflow state")
     st.session_state.workflow_complete = False
     st.session_state.results = None
+    st.session_state.raw_results = None
     st.session_state.is_running = False
     st.session_state.submitted = False
     st.session_state.runtime_id = time.time()
@@ -458,7 +459,7 @@ def main():
         No agent frameworks are available. Please set the required environment variables:
         - OPENAI_API_KEY 
         - ANTHROPIC_API_KEY (for Pydantic and LangGraph)
-        - GOOGLE_API_KEY (for Pydantic and LangGraph)
+        - GEMINI_API_KEY (for Pydantic and LangGraph)
         """)
         return
 
@@ -527,6 +528,10 @@ def main():
 
         # Display the ranked trials outside the expanders
         display_ranked_trials(results)
+
+    # Reset button in the sidebar
+    if st.sidebar.button("Reset Workflow", key="reset_workflow"):
+        reset_workflow()
 
 
 if __name__ == "__main__":
