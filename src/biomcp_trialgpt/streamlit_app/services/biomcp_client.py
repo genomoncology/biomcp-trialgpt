@@ -1,7 +1,7 @@
 import json
 import logging
 from datetime import date
-from typing import Optional
+from typing import Any, Optional
 
 from biomcp.trials.search import RecruitingStatus, TrialPhase, TrialQuery, search_trials
 
@@ -22,7 +22,7 @@ class BioMCPClient:
         min_date: Optional[date] = None,
         max_date: Optional[date] = None,
         phase: Optional[str] = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """
         Retrieve trials matching the condition, age, and gender.
 
@@ -45,12 +45,12 @@ class BioMCPClient:
         if min_date:
             # Accept both date objects and already formatted strings
             if isinstance(min_date, date):
-                query_args["min_date"] = min_date.isoformat()
+                query_args["min_date"] = [min_date.isoformat()]
             else:
                 query_args["min_date"] = min_date
         if max_date:
             if isinstance(max_date, date):
-                query_args["max_date"] = max_date.isoformat()
+                query_args["max_date"] = [max_date.isoformat()]
             else:
                 query_args["max_date"] = max_date
 

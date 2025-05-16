@@ -1,7 +1,7 @@
 import time
 import traceback
 from datetime import date
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional, Union, cast
 
 import streamlit as st
 from streamlit.delta_generator import DeltaGenerator
@@ -496,7 +496,7 @@ def _check_available_frameworks() -> list[str]:
     return available_frameworks
 
 
-def _setup_agent_function(framework: str) -> Optional[Callable]:
+def _setup_agent_function(framework: str) -> Optional[Callable[..., Any]]:
     """Set up the agent function based on the selected framework."""
     agent_map = {
         "pydantic": run_pydantic_agent if pydantic_available else None,
@@ -507,7 +507,7 @@ def _setup_agent_function(framework: str) -> Optional[Callable]:
     if agent_function is None:
         st.error(f"The {framework} agent is not available. Please check your environment variables.")
 
-    return agent_function
+    return cast(Optional[Callable[..., Any]], agent_function)
 
 
 def _display_results(

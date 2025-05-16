@@ -26,7 +26,7 @@ _check:
 	echo "🚀 pre-commit hooks (may auto-fix)"
 	uv run pre-commit run -a
 	echo "🚀 mypy static types"
-	uv run mypy --config-file mypy.ini src || echo "⚠️ Mypy found type issues, but continuing with checks"
+	uv run mypy --config-file mypy.ini src
 	echo "🚀 deptry – unused / missing deps"
 	uv run deptry src || echo "⚠️ Deptry found dependency issues, but continuing with checks"
 

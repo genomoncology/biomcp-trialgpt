@@ -35,7 +35,7 @@ def _format_trial_retrieval(
     retrieved_trials: Optional[list[Any]] = None,
 ) -> dict[str, Any]:
     """Format trial retrieval results for the UI."""
-    step2 = {"params": {}, "response": []}
+    step2 = {"params": {}, "response": []}  # type: dict[str, Any]
 
     # Handle trial retrieval params
     if retrieval_params:
@@ -81,7 +81,7 @@ def _format_eligibility_assessment(
     eligibility_logs: Optional[dict[str, Any]] = None, eligibility_results: Optional[list[Any]] = None
 ) -> dict[str, Any]:
     """Format eligibility assessment results for the UI."""
-    step3 = {"results": []}
+    step3 = {"results": []}  # type: dict[str, Any]
 
     # For consistent formatting to match what the UI expects
     if eligibility_logs:
@@ -126,7 +126,7 @@ def _format_scoring_and_ranking(
     scoring_results: Optional[list[Any]] = None,
 ) -> dict[str, Any]:
     """Format scoring and ranking results for the UI."""
-    step4 = {"scoring_logs": {}, "ranked": []}
+    step4 = {"scoring_logs": {}, "ranked": []}  # type: dict[str, Any]  # Removed redundant type annotation
 
     # Handle scoring logs
     if scoring_logs:

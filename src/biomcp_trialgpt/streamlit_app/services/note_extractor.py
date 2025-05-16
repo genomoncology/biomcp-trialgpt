@@ -79,6 +79,10 @@ def _get_extraction_response(presentation: str, model: str, prompt: str) -> str:
     elif "anthropic" in model:
         from anthropic import AI_PROMPT, HUMAN_PROMPT
 
+        if anthropic_client is None:
+            msg = "Anthropic API key not set or client not initialized."
+            raise ValueError(msg)
+
         human_prompt = HUMAN_PROMPT + prompt + AI_PROMPT
         response = anthropic_client.messages.create(
             model=model.split("anthropic-")[1] if model.startswith("anthropic-") else model.replace("anthropic:", ""),
