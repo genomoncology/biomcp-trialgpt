@@ -1,8 +1,9 @@
 import json
+import logging
 from datetime import date
-from typing import List, Dict
+from typing import Optional
 
-from biomcp.trials.search import TrialQuery, search_trials, RecruitingStatus, TrialPhase
+from biomcp.trials.search import RecruitingStatus, TrialPhase, TrialQuery, search_trials
 
 
 class BioMCPClient:
@@ -12,14 +13,16 @@ class BioMCPClient:
         # Initialize BioMCP client, authentication, etc.
         pass
 
-    async def retrieve_trials(self,
-                              conditions: List[str],
-                              terms: List[str],
-                              interventions: List[str],
-                              recruiting_status: str = None,
-                              min_date: date = None,
-                              max_date: date = None,
-                              phase: str = None) -> List[Dict]:
+    async def retrieve_trials(
+        self,
+        conditions: list[str],
+        terms: list[str],
+        interventions: list[str],
+        recruiting_status: Optional[str] = None,
+        min_date: Optional[date] = None,
+        max_date: Optional[date] = None,
+        phase: Optional[str] = None,
+    ) -> list[dict]:
         """
         Retrieve trials matching the condition, age, and gender.
 
@@ -53,4 +56,5 @@ class BioMCPClient:
 
         # Execute async search and parse JSON
         json_str = await search_trials(TrialQuery(**query_args), output_json=True)
+        logging.info(f"{json.loads(json_str)}")
         return json.loads(json_str)

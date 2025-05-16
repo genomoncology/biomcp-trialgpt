@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Dict, Any, Tuple
+from typing import Any
 
 # Google Generative AI SDK import
 try:
@@ -9,22 +9,20 @@ except ImportError:
     import google.generativeai as genai
 
 # Import configurations from note_extractor
-from biomcp_trialgpt.streamlit_app.services.note_extractor import anthropic_client, _google_key
-from .llm_utils import create_chat_completion as _create_chat_completion
-from anthropic import HUMAN_PROMPT, AI_PROMPT
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+from biomcp_trialgpt.streamlit_app.services.note_extractor import _google_key, anthropic_client
+
+from .llm_utils import create_chat_completion as _create_chat_completion
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # Configure Google SDK if available
-if hasattr(genai, 'configure'):
+if hasattr(genai, "configure"):
     genai.configure(api_key=_google_key)
 
 
-def build_eligibility_prompt(presentation: str, trial_info: Dict[str, Any], inc_exc: str) -> str:
+def build_eligibility_prompt(presentation: str, trial_info: dict[str, Any], inc_exc: str) -> str:
     prompt = (
         f"You are a helpful assistant for clinical trial recruitment. Your task is to compare a "
         f"given patient note and the {inc_exc} criteria of a clinical trial to determine the "
@@ -61,16 +59,14 @@ def build_eligibility_prompt(presentation: str, trial_info: Dict[str, Any], inc_
         "sentence IDs in the patient note. If there is no relevant information, you must annotate "
         "an empty list.\n"
     )
-    prompt += (
-        f"\tElement 3. Classify the patient eligibility for this specific {inc_exc} criterion: "
-    )
+    prompt += f"\tElement 3. Classify the patient eligibility for this specific {inc_exc} criterion: "
     if inc_exc == "inclusion":
         prompt += (
             'the label must be chosen from {"not applicable", "not enough information", "included", "not included"}. '
             '"not applicable" should only be used for criteria that are not applicable to the patient. '
             '"not enough information" should be used where the patient note does not contain sufficient '
             'information for making the classification. Try to use as less "not enough information" as '
-            'possible because if the note does not mention a medically important fact, you can assume '
+            "possible because if the note does not mention a medically important fact, you can assume "
             'that the fact is not true for the patient. "included" denotes that the patient meets the '
             'inclusion criterion, while "not included" means the reverse.\n'
         )
@@ -80,7 +76,7 @@ def build_eligibility_prompt(presentation: str, trial_info: Dict[str, Any], inc_
             '"not applicable" should only be used for criteria that are not applicable to the patient. '
             '"not enough information" should be used where the patient note does not contain sufficient '
             'information for making the classification. Try to use as less "not enough information" as '
-            'possible because if the note does not mention a medically important fact, you can assume '
+            "possible because if the note does not mention a medically important fact, you can assume "
             'that the fact is not true for the patient. "excluded" denotes that the patient meets the '
             'exclusion criterion and should be excluded in the trial, while "not excluded" means the reverse.\n'
         )
@@ -106,37 +102,38 @@ def _call_llm(prompt: str, model: str) -> str:
         return resp.choices[0].message.content.strip()
     # Anthropic
     if "anthropic" in model:
-        from anthropic import HUMAN_PROMPT, AI_PROMPT
+        from anthropic import AI_PROMPT, HUMAN_PROMPT
+
         human_prompt = HUMAN_PROMPT + prompt + AI_PROMPT
         response = anthropic_client.messages.create(
-            model=model.split("anthropic-")[1] if model.startswith("anthropic-") else model.replace('anthropic:', ''),
+            model=model.split("anthropic-")[1] if model.startswith("anthropic-") else model.replace("anthropic:", ""),
             max_tokens=1000,
             temperature=0.7,
-            messages=[
-                {"role": "user", "content": human_prompt}
-            ]
+            messages=[{"role": "user", "content": human_prompt}],
         )
         return response.content[0].text.strip()
     # Google
     if model.startswith("google-"):
-        model_name = model.split("google-")[1].replace('gla:', '')
-        if hasattr(genai, 'chat'):
+        model_name = model.split("google-")[1].replace("gla:", "")
+        if hasattr(genai, "chat"):
             resp = genai.chat.completions.create(
                 model=model_name,
                 messages=[{"author": "user", "content": prompt}],
                 temperature=0.0,
             )
             return resp.candidates[0].content.strip()
-        if hasattr(genai, 'Client'):
+        if hasattr(genai, "Client"):
             client = genai.Client(api_key=_google_key)
             chat = client.chats.create(model=model_name)
             response = chat.send_message(prompt)
             return response.text.strip()
-        raise ValueError("Google Generative AI SDK not available.")
-    raise ValueError(f"Unsupported model: {model}")
+        msg = "Google Generative AI SDK not available."
+        raise ValueError(msg)
+    msg = f"Unsupported model: {model}"
+    raise ValueError(msg)
 
 
-def run_eligibility(presentation: str, trial_info: Dict[str, Any], model: str) -> Dict[str, Tuple[str, str]]:
+def run_eligibility(presentation: str, trial_info: dict[str, Any], model: str) -> dict[str, tuple[str, str]]:
     """Run inclusion and exclusion matching."""
     inc_prompt = build_eligibility_prompt(presentation, trial_info, "inclusion")
     inc_resp = _call_llm(inc_prompt, model)

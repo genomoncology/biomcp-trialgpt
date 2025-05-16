@@ -39,12 +39,12 @@ Before running the application, ensure you have:
    export OPENAI_API_KEY="your-openai-api-key"
    export ANTHROPIC_API_KEY="your-anthropic-api-key"
    export GEMINI_API_KEY="your-gemini-api-key"
-   
+
    # On Windows (Command Prompt)
    set OPENAI_API_KEY=your-openai-api-key
    set ANTHROPIC_API_KEY=your-anthropic-api-key
    set GEMINI_API_KEY=your-gemini-api-key
-   
+
    # On Windows (PowerShell)
    $env:OPENAI_API_KEY="your-openai-api-key"
    $env:ANTHROPIC_API_KEY="your-anthropic-api-key"

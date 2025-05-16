@@ -1,9 +1,7 @@
-from typing import List
-
 import streamlit as st
 
 
-def display_results(results: List[dict], framework: str):
+def display_results(results: list[dict], framework: str):
     st.header(f"Results from {framework} agent")
     if not results:
         st.warning("No trials found.")

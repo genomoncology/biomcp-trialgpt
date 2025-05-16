@@ -3,12 +3,12 @@ import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
-from functools import partial
-from typing import List, Dict, Any, Optional, Union, Annotated, TypedDict, Callable
+from typing import Annotated, Any, Callable, Optional, TypedDict, Union, cast
 
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+
 # Import LangGraph components
-from langgraph.graph import StateGraph, END
+from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 
 # Import original components
@@ -22,13 +22,14 @@ from .scoring import run_scoring
 # Define the agent state schema
 class AgentState(TypedDict):
     """The state of the agent."""
-    messages: Annotated[List[BaseMessage], add_messages]
-    clinical_data: Dict[str, Any]
-    retrieval_params: Dict[str, Any]
-    trials: List[Dict[str, Any]]
-    eligibility_logs: Dict[str, Any]
-    scoring_logs: Dict[str, Any]
-    ranked_trials: List[tuple]
+
+    messages: Annotated[list[BaseMessage], add_messages]
+    clinical_data: dict[str, Any]
+    retrieval_params: dict[str, Any]
+    trials: list[dict[str, Any]]
+    eligibility_logs: dict[str, Any]
+    scoring_logs: dict[str, Any]
+    ranked_trials: list[tuple]
     model_name: str  # Explicitly tracking model name in state
 
 
@@ -42,30 +43,26 @@ def initialize_state(state: AgentState) -> AgentState:
         "eligibility_logs": {},
         "scoring_logs": {},
         "ranked_trials": [],
-        "model_name": state.get("model_name", "gpt-4")
+        "model_name": state.get("model_name", "gpt-4"),
     }
 
 
 def process_clinical_extraction(state: AgentState) -> AgentState:
     """Extract clinical data from the presentation."""
-    presentation = state["messages"][0].content
+    presentation = cast(str, state["messages"][0].content)
     model_name = state["model_name"]
 
     print(f"Extracting clinical data with model: {model_name}")
 
     try:
-        data, prompt, response = parse_clinical_note(presentation, model_name)
+        data, _, _ = parse_clinical_note(presentation, model_name)
     except Exception as e:
         data = {"error": str(e), "chief_complaint": "Error in extraction"}
-        prompt = f"Error occurred: {e}"
-        response = f"Failed to extract with model {model_name}: {e}"
 
     return {
         **state,
         "clinical_data": data,
-        "messages": state["messages"] + [
-            AIMessage(content=f"Extracted clinical data: {json.dumps(data, indent=2)}")
-        ]
+        "messages": state["messages"] + [AIMessage(content=f"Extracted clinical data: {json.dumps(data, indent=2)}")],
     }
 
 
@@ -90,9 +87,8 @@ def setup_trial_retrieval(state: AgentState) -> AgentState:
     return {
         **state,
         "retrieval_params": params,
-        "messages": state["messages"] + [
-            AIMessage(content=f"Set up trial retrieval with parameters: {json.dumps(params, indent=2)}")
-        ]
+        "messages": state["messages"]
+        + [AIMessage(content=f"Set up trial retrieval with parameters: {json.dumps(params, indent=2)}")],
     }
 
 
@@ -110,18 +106,22 @@ def retrieve_clinical_trials(state: AgentState) -> AgentState:
     return {
         **state,
         "trials": trials,
-        "messages": state["messages"] + [
-            AIMessage(content=f"Retrieved {len(trials)} clinical trials.")
-        ]
+        "messages": state["messages"] + [AIMessage(content=f"Retrieved {len(trials)} clinical trials.")],
     }
 
 
-def _batch_process(items, process_fn, batch_size=10, max_workers=4, desc="Processing"):
+def _batch_process(
+    items: list[dict[str, Any]],
+    process_fn: Callable[[dict[str, Any]], Any],
+    batch_size: int = 10,
+    max_workers: int = 4,
+    desc: str = "Processing",
+) -> dict[str, Any]:
     """Generic batch processing utility."""
-    results = {}
+    results: dict[str, Any] = {}
 
     for i in range(0, len(items), batch_size):
-        batch = items[i:i + batch_size]
+        batch = items[i : i + batch_size]
         print(f"{desc} batch {i // batch_size + 1}/{(len(items) + batch_size - 1) // batch_size}")
 
         with ThreadPoolExecutor(max_workers=min(max_workers, len(batch))) as executor:
@@ -142,20 +142,17 @@ def _batch_process(items, process_fn, batch_size=10, max_workers=4, desc="Proces
 
 def process_eligibility(state: AgentState) -> AgentState:
     """Process eligibility for all retrieved trials."""
-    presentation = state["messages"][0].content
+    presentation = cast(str, state["messages"][0].content)
     trials = state["trials"]
     model_name = state["model_name"]
 
     print(f"Checking eligibility with model: {model_name} for {len(trials)} trials")
 
     # Create a function that captures the presentation and model_name
-    process_trial = lambda trial: run_eligibility(presentation, trial, model_name)
+    def process_trial(trial: dict[str, Any]) -> Any:
+        return run_eligibility(presentation, trial, model_name)
 
-    eligibility_logs = _batch_process(
-        trials,
-        process_trial,
-        desc="Processing eligibility"
-    )
+    eligibility_logs = _batch_process(trials, process_trial, desc="Processing eligibility")
 
     # Handle any errors and ensure consistent format
     for nct_id, result in eligibility_logs.items():
@@ -168,15 +165,14 @@ def process_eligibility(state: AgentState) -> AgentState:
     return {
         **state,
         "eligibility_logs": eligibility_logs,
-        "messages": state["messages"] + [
-            AIMessage(content=f"Completed eligibility assessment for {len(eligibility_logs)} trials.")
-        ]
+        "messages": state["messages"]
+        + [AIMessage(content=f"Completed eligibility assessment for {len(eligibility_logs)} trials.")],
     }
 
 
 def process_scoring(state: AgentState) -> AgentState:
     """Score and rank all trials."""
-    presentation = state["messages"][0].content
+    presentation = cast(str, state["messages"][0].content)
     trials = state["trials"]
     eligibility_logs = state["eligibility_logs"]
     model_name = state["model_name"]
@@ -187,7 +183,7 @@ def process_scoring(state: AgentState) -> AgentState:
     eligible_trials = [t for t in trials if (t.get("NCT Number") or t.get("nct_id", "")) in eligibility_logs]
 
     # Define scoring function
-    def score_single_trial(trial):
+    def score_single_trial(trial: dict[str, Any]) -> dict[str, Any]:
         nct_id = trial.get("NCT Number") or trial.get("nct_id", "")
         inc_p, inc_r = eligibility_logs[nct_id]["inclusion"]
         exc_p, exc_r = eligibility_logs[nct_id]["exclusion"]
@@ -196,9 +192,14 @@ def process_scoring(state: AgentState) -> AgentState:
         try:
             _, score_resp = run_scoring(presentation, trial, pred_str, model_name)
             try:
-                json_match = re.search(r'(\{.*\})', score_resp, re.DOTALL)
-                return json.loads(json_match.group(1) if json_match else score_resp)
-            except:
+                json_match = re.search(r"(\{.*\})", score_resp, re.DOTALL)
+                if json_match:
+                    result_dict_match: dict[str, Any] = json.loads(json_match.group(1))
+                    return result_dict_match
+                else:
+                    result_dict_full: dict[str, Any] = json.loads(score_resp)
+                    return result_dict_full
+            except Exception:
                 return {
                     "relevance_explanation": "Error parsing response",
                     "relevance_score_R": 0,
@@ -207,48 +208,42 @@ def process_scoring(state: AgentState) -> AgentState:
                 }
         except Exception as e:
             return {
-                "relevance_explanation": f"Error: {e}",
+                "relevance_explanation": f"Error: {e!s}",
                 "relevance_score_R": 0,
-                "eligibility_explanation": f"Error: {e}",
-                "eligibility_score_E": 0
+                "eligibility_explanation": f"Error: {e!s}",
+                "eligibility_score_E": 0,
             }
 
     # Process in batches
-    scoring_logs = _batch_process(
-        eligible_trials,
-        score_single_trial,
-        desc="Processing scoring",
-        max_workers=3
-    )
+    scoring_logs = _batch_process(eligible_trials, score_single_trial, desc="Scoring trials")
 
     # Rank trials
-    ranked_trials = sorted(
-        scoring_logs.items(),
-        key=lambda kv: kv[1].get("eligibility_score_E", 0),
-        reverse=True
-    )
+    ranked_trials = sorted(scoring_logs.items(), key=lambda kv: kv[1].get("eligibility_score_E", 0), reverse=True)
 
     return {
         **state,
         "scoring_logs": scoring_logs,
         "ranked_trials": ranked_trials,
-        "messages": state["messages"] + [
-            AIMessage(content=f"Completed scoring and ranking for {len(scoring_logs)} trials.")
-        ]
+        "messages": state["messages"]
+        + [AIMessage(content=f"Completed scoring and ranking for {len(scoring_logs)} trials.")],
     }
 
 
 def format_final_result(state: AgentState) -> AgentState:
     """Format the final result with top ranked trials."""
-    ranked_trials = state["ranked_trials"][:min(5, len(state["ranked_trials"]))]
+    ranked_trials = state["ranked_trials"]
     trials = state["trials"]
+
+    # Map trials by ID for quick lookup
     trial_map = {t.get("NCT Number") or t.get("nct_id", ""): t for t in trials}
 
-    result_parts = ["Top ranked clinical trials:\n\n"]
-
-    for i, (nct_id, data) in enumerate(ranked_trials, 1):
-        trial_info = trial_map.get(nct_id, {"Title": "Unknown", "Brief Summary": "No summary available"})
-        summary = trial_info.get("Brief Summary", "No summary available")[:200] + "..."
+    # Format top 5 trials
+    result_parts = ["Top ranked clinical trials:"]
+    for i, (nct_id, data) in enumerate(ranked_trials[:5], 1):
+        trial_info = trial_map.get(nct_id, {})
+        summary = trial_info.get("Brief Summary", "No summary available")
+        if len(summary) > 200:
+            summary = summary[:200] + "..."
 
         result_parts.append(
             f"{i}. NCT ID: {nct_id}\n"
@@ -258,21 +253,18 @@ def format_final_result(state: AgentState) -> AgentState:
             f"   Summary: {summary}\n\n"
         )
 
-    return {
-        **state,
-        "messages": state["messages"] + [AIMessage(content="".join(result_parts))]
-    }
+    return {**state, "messages": state["messages"] + [AIMessage(content="".join(result_parts))]}
 
 
 def run_langgraph_agent(
-        presentation: str,
-        llm_model: str = "gpt-4",
-        recruiting_status: str = "Recruiting",
-        min_date: Optional[Union[date, int]] = None,
-        max_date: Optional[Union[date, int]] = None,
-        phase: str = "Phase 1|Phase 2|Phase 3",
-        debug_mode: bool = False,
-) -> Dict[str, Any]:
+    presentation: str,
+    llm_model: str = "gpt-4",
+    recruiting_status: str = "Recruiting",
+    min_date: Optional[Union[date, int]] = None,
+    max_date: Optional[Union[date, int]] = None,
+    phase: str = "Phase 1|Phase 2|Phase 3",
+    debug_mode: bool = False,
+) -> dict[str, Any]:
     """Run the LangGraph agent pipeline for clinical trial matching."""
     print(f"Starting workflow with model: {llm_model}")
 
@@ -288,23 +280,30 @@ def run_langgraph_agent(
             "recruiting_status": recruiting_status,
             "min_date": min_date_str,
             "max_date": max_date_str,
-            "phase": phase
+            "phase": phase,
         },
         "trials": [],
         "eligibility_logs": {},
         "scoring_logs": {},
         "ranked_trials": [],
-        "model_name": llm_model
+        "model_name": llm_model,
     }
 
     # Execute workflow
     workflow = _build_workflow_graph()
     if debug_mode:
-        from langgraph.trace import trace
-        with trace(workflow) as tracer:
+        # Import trace only when needed to avoid import error if not available
+        try:
+            from langgraph.trace import trace  # type: ignore[import-not-found]
+
+            with trace(workflow) as tracer:
+                result = workflow.invoke(initial_state)
+                trace_events = tracer.get_events()
+                return {"result": result, "trace": trace_events}
+        except ImportError:
+            # Fallback if trace is not available
             result = workflow.invoke(initial_state)
-            trace_events = tracer.get_events()
-            return {"result": result, "trace": trace_events}
+            return {"result": result, "trace": []}
 
     # Standard execution with formatted response
     result = workflow.invoke(initial_state)
@@ -315,11 +314,11 @@ def run_langgraph_agent(
         eligibility_logs=result.get("eligibility_logs", {}),
         scoring_logs=result.get("scoring_logs", {}),
         ranked_trials=result.get("ranked_trials", []),
-        model_name=result.get("model_name", llm_model)
+        model_name=result.get("model_name", llm_model),
     )
 
 
-def _format_date(date_input, default):
+def _format_date(date_input: Optional[Union[date, int]], default: str) -> str:
     """Format date input for API."""
     if date_input is None:
         return default
@@ -329,7 +328,7 @@ def _format_date(date_input, default):
         return date_input.strftime("%Y-%m-%d")
 
 
-def _build_workflow_graph():
+def _build_workflow_graph() -> Any:
     """Build and return the workflow graph."""
     graph = StateGraph(AgentState)
 
@@ -341,7 +340,7 @@ def _build_workflow_graph():
         "retrieve_trials": retrieve_clinical_trials,
         "check_eligibility": process_eligibility,
         "score_trials": process_scoring,
-        "format_result": format_final_result
+        "format_result": format_final_result,
     }
 
     # Add all nodes

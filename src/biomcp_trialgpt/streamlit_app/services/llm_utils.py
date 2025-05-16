@@ -5,7 +5,8 @@ from openai import OpenAI
 # Configure API key for OpenAI
 _api_key = os.getenv("OPENAI_API_KEY")
 if not _api_key:
-    raise ValueError("OPENAI_API_KEY environment variable is not set")
+    msg = "OPENAI_API_KEY environment variable is not set"
+    raise ValueError(msg)
 
 # client = OpenAI(api_key=_api_key)
 

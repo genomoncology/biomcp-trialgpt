@@ -1,10 +1,10 @@
 import json
-from typing import Dict, Any, Tuple
+from typing import Any
 
 from biomcp_trialgpt.streamlit_app.services.eligibility import _call_llm
 
 
-def build_scoring_prompt(presentation: str, trial_info: Dict[str, Any], pred_str: str) -> str:
+def build_scoring_prompt(presentation: str, trial_info: dict[str, Any], pred_str: str) -> str:
     prompt = (
         "You are a helpful assistant for clinical trial recruitment. You will be given a "
         "patient note, a clinical trial, and the patient eligibility predictions for each criterion.\n"
@@ -25,9 +25,9 @@ def build_scoring_prompt(presentation: str, trial_info: Dict[str, Any], pred_str
         "fully eligible, and E=0 denotes neutral.\n"
     )
     prompt += (
-        "Please output a JSON dict formatted as: {\"relevance_explanation\": string, "
-        "\"relevance_score_R\": number, \"eligibility_explanation\": string, "
-        "\"eligibility_score_E\": number}.\n"
+        'Please output a JSON dict formatted as: {"relevance_explanation": string, '
+        '"relevance_score_R": number, "eligibility_explanation": string, '
+        '"eligibility_score_E": number}.\n'
     )
     prompt += "Here is the patient note:\n" + presentation + "\n\n"
     prompt += "Here is the clinical trial description:\n" + json.dumps(trial_info) + "\n\n"
@@ -36,7 +36,7 @@ def build_scoring_prompt(presentation: str, trial_info: Dict[str, Any], pred_str
     return prompt
 
 
-def run_scoring(presentation: str, trial_info: Dict[str, Any], pred_str: str, model: str) -> Tuple[str, str]:
+def run_scoring(presentation: str, trial_info: dict[str, Any], pred_str: str, model: str) -> tuple[str, str]:
     prompt = build_scoring_prompt(presentation, trial_info, pred_str)
     resp = _call_llm(prompt, model)
     return prompt, resp

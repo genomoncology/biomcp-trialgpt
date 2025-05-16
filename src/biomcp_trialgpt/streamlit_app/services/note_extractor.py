@@ -1,7 +1,7 @@
 import json
 import logging
 import os
-import sys
+from typing import Any
 
 import anthropic
 
@@ -9,35 +9,26 @@ try:
     from google import genai
 except ImportError:
     import google.generativeai as genai
-from typing import Dict, Any, Tuple
+
 from .llm_utils import create_chat_completion as _create_chat_completion
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Configure API key (in case not already set)
+# API Keys
 _api_key = os.getenv("OPENAI_API_KEY")
-if not _api_key:
-    raise ValueError("OPENAI_API_KEY environment variable is not set")
-
-# Configure Anthropic
 _anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-if not _anthropic_key:
-    raise ValueError("ANTHROPIC_API_KEY environment variable is not set")
-
-anthropic_client = anthropic.Anthropic(api_key=_anthropic_key)
-
-# Load Google API key
 _google_key = os.getenv("GEMINI_API_KEY")
-if not _google_key:
-    raise ValueError("GEMINI_API_KEY environment variable is not set")
+
+# Initialize clients
+anthropic_client = anthropic.Anthropic(api_key=_anthropic_key) if _anthropic_key else None
+
 # Configure for google.generativeai if available
-if hasattr(genai, 'configure'):
+if _google_key and hasattr(genai, "configure"):
     genai.configure(api_key=_google_key)
 
+# Extraction system prompt
 EXTRACTION_SYSTEM = """
 You are a clinical data-extraction assistant.
 Extract from the free-text patient note exactly these JSON fields:
@@ -47,21 +38,33 @@ Extract from the free-text patient note exactly these JSON fields:
 - chief_complaint (str)
 - onset (str)
 - duration (str)
-- associated_symptoms (list[str])
-- past_medical_history (list[str])
-- social_history (list[str])
+- conditions (list[str])
+- terms (list[str])
+- interventions (list[str])
 - medications (list[str])
-- physical_exam (str)
-- ekg_findings (str)
-- conditions (list[str])  # conditions terms for trial matching
-- terms (list[str])       # general search terms from note
-- interventions (list[str])  # intervention names mentioned
+- allergies (list[str])
+- vitals (dict)
+- labs (dict)
+- imaging (dict)
+- assessment (str)
+- plan (str)
 
 Output ONLY valid JSON.
 """
 
 
 def _get_extraction_response(presentation: str, model: str, prompt: str) -> str:
+    """
+    Get extraction response from the appropriate model API.
+
+    Args:
+        presentation: The clinical note text to parse
+        model: The model to use for parsing
+        prompt: The prompt to send to the model
+
+    Returns:
+        The raw response content from the model as a string
+    """
     # Route to the appropriate API based on selected model
     if "gpt-" in model:
         resp = _create_chat_completion(
@@ -74,22 +77,21 @@ def _get_extraction_response(presentation: str, model: str, prompt: str) -> str:
         )
         return resp.choices[0].message.content.strip()
     elif "anthropic" in model:
-        from anthropic import HUMAN_PROMPT, AI_PROMPT
+        from anthropic import AI_PROMPT, HUMAN_PROMPT
+
         human_prompt = HUMAN_PROMPT + prompt + AI_PROMPT
         response = anthropic_client.messages.create(
-            model=model.split("anthropic-")[1] if model.startswith("anthropic-") else model.replace('anthropic:', ''),
+            model=model.split("anthropic-")[1] if model.startswith("anthropic-") else model.replace("anthropic:", ""),
             max_tokens=1000,
             temperature=0.7,
-            messages=[
-                {"role": "user", "content": human_prompt}
-            ]
+            messages=[{"role": "user", "content": human_prompt}],
         )
         return response.content[0].text.strip()
     elif model.startswith("google-"):
         # Google Gemini via google.generativeai or google-genai SDK
-        model_name = model.split("google-")[1].replace('gla:', '')
+        model_name = model.split("google-")[1].replace("gla:", "")
         # If using google.generativeai
-        if hasattr(genai, 'chat'):
+        if hasattr(genai, "chat"):
             resp = genai.chat.completions.create(
                 model=model_name,
                 messages=[{"author": "user", "content": prompt}],
@@ -97,18 +99,33 @@ def _get_extraction_response(presentation: str, model: str, prompt: str) -> str:
             )
             return resp.candidates[0].content.strip()
         # If using google-genai (Client)
-        if hasattr(genai, 'Client'):
+        if hasattr(genai, "Client"):
             client = genai.Client(api_key=_google_key)
             # google-genai SDK: create a chat and send message
             chat = client.chats.create(model=model_name)
             response = chat.send_message(prompt)
             return response.text.strip()
-        raise ValueError("Google Generative AI SDK not available.")
+        msg = "Google Generative AI SDK not available."
+        raise ValueError(msg)
     else:
-        raise ValueError(f"Unsupported model: {model}")
+        msg = f"Unsupported model: {model}"
+        raise ValueError(msg)
 
 
-def parse_clinical_note(presentation: str, model: str) -> Tuple[Dict[str, Any], str, str]:
+def parse_clinical_note(presentation: str, model: str) -> tuple[dict[str, Any], str, str]:
+    """
+    Parse a clinical note using the specified model.
+
+    Args:
+        presentation: The clinical note text to parse
+        model: The model to use for parsing (e.g., "gpt-4", "anthropic-claude", "google-gemini")
+
+    Returns:
+        A tuple containing:
+        - The extracted data as a dictionary
+        - The prompt used for extraction
+        - The raw response content from the model
+    """
     prompt = f"""{EXTRACTION_SYSTEM}\n\nNote:\n\"\"\"\n{presentation}\n\"\"\"\n"""
     try:
         logger.info(f"Using model {model} for parsing clinical note")
@@ -125,14 +142,16 @@ def parse_clinical_note(presentation: str, model: str) -> Tuple[Dict[str, Any], 
             if "{" in clean and "}" in clean:
                 start = clean.find("{")
                 end = clean.rfind("}")
-                clean = clean[start:end + 1]
+                clean = clean[start : end + 1]
             try:
                 data = json.loads(clean)
             except json.JSONDecodeError:
                 data = {"chief_complaint": presentation}
-        return data, prompt, resp_content
+            return data, prompt, resp_content
+        else:
+            return data, prompt, resp_content
     except Exception as e:
         data = {"chief_complaint": presentation, "error": str(e)}
-        logger.info(e.with_traceback(sys.exc_info()[2]))
+        logger.exception("Error parsing clinical note")
         resp_content = json.dumps(data)
         return data, prompt, resp_content

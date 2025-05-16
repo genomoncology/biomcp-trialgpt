@@ -1,16 +1,16 @@
-from typing import List, Optional
+from typing import Optional
 
 import streamlit as st
 
 
-def framework_selector(available_options: Optional[List[str]] = None):
+def framework_selector(available_options: Optional[list[str]] = None):
     """
     Display a radio button selector for the agent framework.
-    
+
     Args:
         available_options: Optional list of available frameworks to show.
                           If None, all frameworks will be shown.
-    
+
     Returns:
         The selected framework as a string.
     """
