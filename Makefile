@@ -34,6 +34,10 @@ _check:
 pbdiff: ## Copy git diff to clipboard
 	 @git diff -- . ':(exclude)uv.lock' | pbcopy
 
+.PHONY: streamlit
+streamlit:
+	@uv run streamlit run src/biomcp_trialgpt/streamlit_app/main.py
+
 .PHONY: pyclean
 pyclean: ## Remove temporary files
 	@echo "Running pyclean to remove .pyc and cache"
