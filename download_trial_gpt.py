@@ -4,37 +4,38 @@
 # dependencies = [
 #     "requests",
 #     "tqdm",
+#     "defusedxml",
 # ]
 # ///
 """download_trialgpt_data.py
 
 Utility script to fetch the public datasets used in the
 "Matching Patients to Clinical Trials with Large Language Models" (TrialGPT)
-paper and to pre‑extract the patient IDs (topic numbers) and trial NCT IDs
+paper and to pre-extract the patient IDs (topic numbers) and trial NCT IDs
 needed for experimentation.
 
 The script is **functional**, uses only the standard library plus `requests`
-and `tqdm`, and writes deterministic plain‑text ID lists under `./data/ids/`.
+and `tqdm`, and writes deterministic plain-text ID lists under `./data/ids/`.
 
 Datasets pulled
 ---------------
-* **trial_info.json** – pre‑parsed master dump of ClinicalTrials.gov used by the authors.
-* **TREC Clinical Trials 2021 corpus** – jsonl, restricted to the 26 k judged trials.
-* **TREC Clinical Trials 2022 corpus** – jsonl.
-* **topics2021.xml / topics2022.xml** – synthetic patient notes (75 + 50 patients).
+* **trial_info.json** - pre-parsed master dump of ClinicalTrials.gov used by the authors.
+* **TREC Clinical Trials 2021 corpus** - jsonl, restricted to the 26 k judged trials.
+* **TREC Clinical Trials 2022 corpus** - jsonl.
+* **topics2021.xml / topics2022.xml** - synthetic patient notes (75 + 50 patients).
 
-The SIGIR‑2016 test collection can’t be fetched automatically (CSIRO portal
-requires a click‑through).  If you already have it, drop the XML file or the
-`topics.xml` inside `./data/sigir/` and re‑run the script – it will be parsed
+The SIGIR-2016 test collection can't be fetched automatically (CSIRO portal
+requires a click-through).  If you already have it, drop the XML file or the
+`topics.xml` inside `./data/sigir/` and re-run the script - it will be parsed
 automatically.
 
-Outputs (all UTF‑8, one ID per line)
+Outputs (all UTF-8, one ID per line)
 -----------------------------------
 * `data/ids/trec2021_patient_ids.txt`
 * `data/ids/trec2022_patient_ids.txt`
 * `data/ids/trec2021_trial_ids.txt`
 * `data/ids/trec2022_trial_ids.txt`
-* `data/ids/all_trial_ids.txt` – union of 2021/2022 trial IDs
+* `data/ids/all_trial_ids.txt` - union of 2021/2022 trial IDs
 
 Run
 ---
@@ -51,8 +52,9 @@ import gzip
 import json
 import sys
 from pathlib import Path
-from typing import Iterable, Set
 
+# Use defusedxml instead of xml.etree.ElementTree for security
+import defusedxml.ElementTree as ET
 import requests
 from tqdm import tqdm
 
@@ -64,16 +66,16 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 ID_DIR.mkdir(parents=True, exist_ok=True)
 
 URLS = {
-    # NCBI FTP mirrors – anonymous access
+    # NCBI FTP mirrors - anonymous access
     "trial_info": "https://ftp.ncbi.nlm.nih.gov/pub/lu/TrialGPT/trial_info.json",
     "trec_2021": "https://ftp.ncbi.nlm.nih.gov/pub/lu/TrialGPT/trec_2021_corpus.jsonl",
     "trec_2022": "https://ftp.ncbi.nlm.nih.gov/pub/lu/TrialGPT/trec_2022_corpus.jsonl",
-    # topic files are small XMLs hosted on trec‑cds.org
+    # topic files are small XMLs hosted on trec-cds.org
     "topics2021": "https://www.trec-cds.org/topics2021.xml",
     "topics2022": "https://www.trec-cds.org/topics2022.xml",
 }
 
-CHUNK = 1 << 16  # 64 KiB
+CHUNK = 1 << 16  # 64 KiB
 
 
 # ---------------------------------------------------------------------------
@@ -89,9 +91,7 @@ def stream_download(url: str, dest: Path, quiet: bool = False):
     r = requests.get(url, stream=True, timeout=60)
     r.raise_for_status()
     total = int(r.headers.get("Content-Length", 0)) or None
-    bar = (
-        None if quiet else tqdm(total=total, unit="B", unit_scale=True, desc=dest.name)
-    )
+    bar = None if quiet else tqdm(total=total, unit="B", unit_scale=True, desc=dest.name)
     with dest.open("wb") as fh:
         for chunk in r.iter_content(chunk_size=CHUNK):
             fh.write(chunk)
@@ -106,8 +106,8 @@ def stream_download(url: str, dest: Path, quiet: bool = False):
 # ---------------------------------------------------------------------------
 
 
-def extract_trial_ids(jsonl: Path) -> Set[str]:
-    ids: Set[str] = set()
+def extract_trial_ids(jsonl: Path) -> set[str]:
+    ids: set[str] = set()
     open_fn = gzip.open if jsonl.suffix == ".gz" else open
     with open_fn(jsonl, "rt", encoding="utf8") as fh:
         for line in fh:
@@ -121,10 +121,10 @@ def extract_trial_ids(jsonl: Path) -> Set[str]:
     return ids
 
 
-def extract_topic_ids(topics_xml: Path) -> Set[str]:
+def extract_topic_ids(topics_xml: Path) -> set[str]:
     tree = ET.parse(topics_xml)
     root = tree.getroot()
-    ids: Set[str] = set()
+    ids: set[str] = set()
     for topic in root.findall(".//topic"):
         num = topic.attrib.get("number") or topic.attrib.get("id")
         if num:
@@ -137,29 +137,17 @@ def extract_topic_ids(topics_xml: Path) -> Set[str]:
 # ---------------------------------------------------------------------------
 
 
-def main(argv: list[str] | None = None):
-    p = argparse.ArgumentParser()
-    p.add_argument("-q", "--quiet", action="store_true", help="suppress progress bars")
-    args = p.parse_args(argv)
-
-    quiet = args.quiet
-
-    # 1. Download corpora
-    targets = {
-        "trial_info": DATA_DIR / "trial_info.json",
-        "trec_2021": DATA_DIR / "trec_2021_corpus.jsonl",
-        "trec_2022": DATA_DIR / "trec_2022_corpus.jsonl",
-        "topics2021": DATA_DIR / "topics2021.xml",
-        "topics2022": DATA_DIR / "topics2022.xml",
-    }
-
+def _download_corpora(targets, quiet):
+    """Download corpora from URLs."""
     for key, url in URLS.items():
         try:
             stream_download(url, targets[key], quiet=quiet)
         except Exception as e:
             print(f"[warn] failed to download {url}: {e}", file=sys.stderr)
 
-    # 2. Extract patient (topic) IDs
+
+def _extract_patient_ids(targets, quiet):
+    """Extract patient IDs from topic XML files."""
     for year in (2021, 2022):
         xml_path = targets[f"topics{year}"]
         if not xml_path.exists():
@@ -179,12 +167,12 @@ def main(argv: list[str] | None = None):
         if not quiet:
             print(f"[*] wrote {len(ids):>3} SIGIR patient IDs")
     else:
-        print(
-            "[info] SIGIR topics XML not found – drop it in data/sigir/ to enable parsing."
-        )
+        print("[info] SIGIR topics XML not found - drop it in data/sigir/ to enable parsing.")
 
-    # 3. Extract trial IDs from corpora
-    trial_union: Set[str] = set()
+
+def _extract_trial_ids(targets, quiet):
+    """Extract trial IDs from corpus files."""
+    trial_union: set[str] = set()
     for year in (2021, 2022):
         corpus_path = targets[f"trec_{year}"]
         if not corpus_path.exists():
@@ -192,15 +180,39 @@ def main(argv: list[str] | None = None):
             continue
         ids = extract_trial_ids(corpus_path)
         trial_union.update(ids)
-        (ID_DIR / f"trec{year}_trial_ids.txt").write_text(
-            "\n".join(sorted(ids)), "utf8"
-        )
+        (ID_DIR / f"trec{year}_trial_ids.txt").write_text("\n".join(sorted(ids)), "utf8")
         if not quiet:
             print(f"[*] wrote {len(ids):>6} trial IDs for {year}")
 
     (ID_DIR / "all_trial_ids.txt").write_text("\n".join(sorted(trial_union)), "utf8")
     if not quiet:
         print(f"[*] wrote {len(trial_union):>6} unique trial IDs (union)")
+
+
+def main(argv: list[str] | None = None):
+    p = argparse.ArgumentParser()
+    p.add_argument("-q", "--quiet", action="store_true", help="suppress progress bars")
+    args = p.parse_args(argv)
+
+    quiet = args.quiet
+
+    # 1. Define targets
+    targets = {
+        "trial_info": DATA_DIR / "trial_info.json",
+        "trec_2021": DATA_DIR / "trec_2021_corpus.jsonl",
+        "trec_2022": DATA_DIR / "trec_2022_corpus.jsonl",
+        "topics2021": DATA_DIR / "topics2021.xml",
+        "topics2022": DATA_DIR / "topics2022.xml",
+    }
+
+    # 2. Download corpora
+    _download_corpora(targets, quiet)
+
+    # 3. Extract patient (topic) IDs
+    _extract_patient_ids(targets, quiet)
+
+    # 4. Extract trial IDs from corpora
+    _extract_trial_ids(targets, quiet)
 
 
 if __name__ == "__main__":
