@@ -1,7 +1,8 @@
+import os
 import time
 import traceback
 from datetime import date
-from typing import Any, Callable, Optional, Union, cast
+from typing import Any, Callable, Optional, cast
 
 import streamlit as st
 from streamlit.delta_generator import DeltaGenerator
@@ -49,6 +50,14 @@ def init_session_state() -> None:
     if "runtime_id" not in st.session_state:
         st.session_state.runtime_id = time.time()
 
+    # Initialize API keys from environment variables if not already set
+    if "openai_api_key" not in st.session_state:
+        st.session_state.openai_api_key = os.getenv("OPENAI_API_KEY", "")
+    if "anthropic_api_key" not in st.session_state:
+        st.session_state.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if "gemini_api_key" not in st.session_state:
+        st.session_state.gemini_api_key = os.getenv("GEMINI_API_KEY", "")
+
     # Explicitly set expander states
     st.session_state.step1_expanded = False
     st.session_state.step2_expanded = False
@@ -93,86 +102,105 @@ def run_workflow(
     presentation: str,
     llm_model: str,
     recruiting_status: str,
-    min_date: Optional[Union[date, int]],
-    max_date: Optional[Union[date, int]],
+    min_date: Optional[date],
+    max_date: Optional[date],
     phase: str,
 ) -> Optional[dict[str, Any]]:
-    """Run the selected agent workflow and handle results."""
+    """Run the clinical trial matching workflow using the specified agent function."""
+    print(f"Running workflow with model: {llm_model}")
+    st.session_state.is_running = True
+    results = None
+
     try:
         print(f"Starting workflow... (Runtime ID: {st.session_state.runtime_id})")
-        st.session_state.is_running = True
         st.info("Starting workflow - this may take a few minutes...")
 
+        # Get API keys from session state
+        from biomcp_trialgpt.streamlit_app.services.note_extractor import get_api_keys
+
+        openai_key, anthropic_key, google_key = get_api_keys()
+
+        # Set environment variables for the API keys
+        # This ensures they're available to all components that might need them
+        import os
+
+        if openai_key:
+            os.environ["OPENAI_API_KEY"] = openai_key
+        if anthropic_key:
+            os.environ["ANTHROPIC_API_KEY"] = anthropic_key
+        if google_key:
+            os.environ["GEMINI_API_KEY"] = google_key
+
+        # Run the agent function with the provided parameters
         with st.spinner("Running full workflow pipeline..."):
-            # Run the agent with all steps
-            results: dict[str, Any] = agent_function(
-                presentation, llm_model, recruiting_status, min_date, max_date, phase
-            )
+            results = agent_function(presentation, llm_model, recruiting_status, min_date, max_date, phase)
 
-            print("Workflow completed, results received:")
-            print_output("Results", results)
+        print("Workflow completed, results received:")
+        print_output("Results", results)
 
-            # Debug JSON serialization
-            try:
-                import json
+        # Process results and handle JSON serialization
+        results = process_workflow_results(results)
 
-                json_str = json.dumps(results, default=str)
-                print(f"JSON serialization successful: {len(json_str)} characters")
-            except Exception:
-                print("JSON serialization failed")
-                # Try to identify problematic fields
-                for key, value in results.items():
-                    try:
-                        json.dumps({key: value}, default=str)
-                    except Exception:
-                        print(f"Problem with key {key}")
+        # Store results and update workflow state
+        st.session_state.results = results
+        st.session_state.workflow_complete = True
 
-                # Try to create a clean version of the results
-                clean_results: dict[str, Any] = {}
-                for key, value in results.items():
-                    if value is None:
-                        clean_results[key] = None
-                    elif isinstance(value, dict):
-                        try:
-                            # Try to convert to JSON and back
-                            json_value = json.loads(json.dumps(value, default=str))
-                            clean_results[key] = json_value
-                        except Exception:
-                            # Fall back to string representation
-                            clean_results[key] = str(value)
-                    else:
-                        clean_results[key] = str(value)
+        # Expanders should initially be closed
+        st.session_state.step1_expanded = False
+        st.session_state.step2_expanded = False
+        st.session_state.step3_expanded = False
+        st.session_state.step4_expanded = False
 
-                # Replace original results with clean version
-                results = clean_results
-                print("Created clean results for JSON serialization:")
-                print_output("Clean Results", results)
+        st.success("Workflow completed successfully!")
+        st.session_state.is_running = False
+        st.session_state.submitted = False  # Reset submitted to prevent re-running
 
-            # Store results and update workflow state
-            st.session_state.results = results
-            st.session_state.workflow_complete = True
-
-            # Expanders should initially be closed
-            st.session_state.step1_expanded = False
-            st.session_state.step2_expanded = False
-            st.session_state.step3_expanded = False
-            st.session_state.step4_expanded = False
-
-            st.success("Workflow completed successfully!")
-            st.session_state.is_running = False
-            st.session_state.submitted = False  # Reset submitted to prevent re-running
-
-            print(f"Results stored in session state. Workflow complete: {st.session_state.workflow_complete}")
-
-            return results
-
+        print(f"Results stored in session state. Workflow complete: {st.session_state.workflow_complete}")
     except Exception as e:
         print(f"Error in run_workflow: {e!s}")
         traceback.print_exc()
         st.error(f"Error running workflow: {e!s}")
         st.session_state.is_running = False
         st.session_state.submitted = False
-        return None
+
+    return results
+
+
+def process_workflow_results(results: dict[str, Any]) -> dict[str, Any]:
+    """Process workflow results to ensure they can be serialized to JSON."""
+    if not results:
+        return {}
+
+    # Debug JSON serialization
+    try:
+        import json
+
+        json_str = json.dumps(results, default=str)
+        print(f"JSON serialization successful: {len(json_str)} characters")
+    except Exception:
+        print("JSON serialization failed")
+        # Try to identify problematic fields
+        for key, value in results.items():
+            try:
+                json.dumps({key: value}, default=str)
+            except Exception:
+                print(f"Problem with key {key}")
+
+        # Create a clean version of the results
+        clean_results: dict[str, Any] = {}
+        for key, value in results.items():
+            if isinstance(value, dict):
+                clean_results[key] = {}
+                for k, v in value.items():
+                    clean_results[key][k] = str(v)
+            else:
+                clean_results[key] = str(value)
+
+        print("Created clean results for JSON serialization:")
+        print_output("Clean Results", clean_results)
+        return clean_results
+    else:
+        return results
 
 
 def display_step1_results(step1: dict[str, Any], expander: DeltaGenerator) -> None:
@@ -479,18 +507,31 @@ def _setup_page_header() -> None:
 
 def _check_available_frameworks() -> list[str]:
     """Check which agent frameworks are available and return them."""
+    # Get current API keys from session state
+    openai_key = st.session_state.get("openai_api_key", "")
+    anthropic_key = st.session_state.get("anthropic_api_key", "")
+    gemini_key = st.session_state.get("gemini_api_key", "")
+
+    # Check if keys are available
+    has_openai = bool(openai_key)
+    has_anthropic = bool(anthropic_key)
+    has_gemini = bool(gemini_key)
+
+    # Check if at least one key is available
+    has_any_key = has_openai or has_anthropic or has_gemini
+
     available_frameworks = []
-    if pydantic_available:
+    if pydantic_available and has_any_key:
         available_frameworks.append("pydantic")
-    if langgraph_available:
+    if langgraph_available and has_any_key:
         available_frameworks.append("langgraph")
 
     if not available_frameworks:
         st.error("""
-        No agent frameworks are available. Please set the required environment variables:
-        - OPENAI_API_KEY
-        - ANTHROPIC_API_KEY (for Pydantic and LangGraph)
-        - GEMINI_API_KEY (for Pydantic and LangGraph)
+        No agent frameworks are available. Please set at least one API key in the sidebar:
+        - OpenAI API Key
+        - Anthropic API Key
+        - Google Gemini API Key
         """)
 
     return available_frameworks
@@ -540,6 +581,12 @@ def main() -> None:
 
     # Initialize session state variables
     init_session_state()
+
+    # Display API key form in sidebar
+    input_form.api_keys_form()
+
+    # Add a separator in the sidebar
+    st.sidebar.markdown("---")
 
     # Check available frameworks
     available_frameworks = _check_available_frameworks()

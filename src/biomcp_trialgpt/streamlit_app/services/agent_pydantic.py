@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
@@ -13,7 +14,7 @@ from pydantic_ai import Agent, RunContext
 # Import necessary components
 from .biomcp_client import BioMCPClient
 from .eligibility import run_eligibility
-from .note_extractor import parse_clinical_note
+from .note_extractor import get_api_keys, parse_clinical_note
 from .response_formatter import format_response_for_ui
 from .scoring import run_scoring
 
@@ -24,6 +25,11 @@ logger = logging.getLogger(__name__)
 # Type variables for generic functions
 T = TypeVar("T")
 R = TypeVar("R")
+
+# Define error messages as constants
+OPENAI_KEY_ERROR = "OpenAI API key not set. Please provide an API key in the sidebar."
+ANTHROPIC_KEY_ERROR = "Anthropic API key not set. Please provide an API key in the sidebar."
+GOOGLE_KEY_ERROR = "Google Gemini API key not set. Please provide an API key in the sidebar."
 
 #######################
 # SIMPLIFIED MODELS
@@ -556,6 +562,22 @@ def get_pipeline_agent(llm_model: str) -> Agent:
     """Create a Pydantic AI agent for clinical trial matching."""
     logger.info(f"Creating agent with model: {llm_model}")
 
+    # Get API keys from session state
+    openai_key, anthropic_key, google_key = get_api_keys()
+
+    # Determine which provider to use based on the model
+    provider_kwargs = {}
+    if "gpt-" in llm_model and openai_key:
+        provider_kwargs = {"provider": "openai", "api_key": openai_key}
+    elif "anthropic" in llm_model and anthropic_key:
+        provider_kwargs = {"provider": "anthropic", "api_key": anthropic_key}
+    elif "google-" in llm_model and google_key:
+        # Set the environment variable directly for Google Gemini
+        os.environ["GEMINI_API_KEY"] = google_key
+        # Use google_gla provider but don't pass the API key directly
+        provider_kwargs = {"provider": "google_gla"}
+
+    # Create and return the agent with the appropriate provider
     return Agent(
         llm_model.replace("gpt-", ""),
         deps_type=PipelineConfig,
@@ -574,6 +596,7 @@ def get_pipeline_agent(llm_model: str) -> Agent:
             run_clinical_trial_pipeline,
         ],
         system_prompt="You are a clinical trial matching assistant. Your role is to extract patient information from clinical notes, retrieve relevant trials, assess eligibility, and rank matches.",
+        **provider_kwargs,
     )
 
 
@@ -591,6 +614,17 @@ def run_pydantic_agent(
     phase: str,
 ) -> dict[str, Any]:
     """Run the clinical trial matching pipeline using a Pydantic AI agent."""
+    # Get API keys from session state
+    openai_key, anthropic_key, google_key = get_api_keys()
+
+    # Ensure we have the appropriate API key for the selected model
+    if "gpt-" in llm_model and not openai_key:
+        raise ValueError(OPENAI_KEY_ERROR)
+    if "anthropic" in llm_model and not anthropic_key:
+        raise ValueError(ANTHROPIC_KEY_ERROR)
+    if "google-" in llm_model and not google_key:
+        raise ValueError(GOOGLE_KEY_ERROR)
+
     # Create configuration
     config = PipelineConfig(
         clinical_note=presentation,

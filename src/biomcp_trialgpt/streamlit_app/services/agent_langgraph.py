@@ -14,7 +14,7 @@ from langgraph.graph.message import add_messages
 # Import original components
 from .biomcp_client import BioMCPClient
 from .eligibility import run_eligibility
-from .note_extractor import parse_clinical_note
+from .note_extractor import get_api_keys, parse_clinical_note
 from .response_formatter import format_response_for_ui
 from .scoring import run_scoring
 
@@ -31,6 +31,12 @@ class AgentState(TypedDict):
     scoring_logs: dict[str, Any]
     ranked_trials: list[tuple]
     model_name: str  # Explicitly tracking model name in state
+
+
+# Define error messages as constants
+OPENAI_KEY_ERROR = "OpenAI API key not set. Please provide an API key in the sidebar."
+ANTHROPIC_KEY_ERROR = "Anthropic API key not set. Please provide an API key in the sidebar."
+GOOGLE_KEY_ERROR = "Google Gemini API key not set. Please provide an API key in the sidebar."
 
 
 def initialize_state(state: AgentState) -> AgentState:
@@ -267,6 +273,17 @@ def run_langgraph_agent(
 ) -> dict[str, Any]:
     """Run the LangGraph agent pipeline for clinical trial matching."""
     print(f"Starting workflow with model: {llm_model}")
+
+    # Get API keys from session state
+    openai_key, anthropic_key, google_key = get_api_keys()
+
+    # Ensure we have the appropriate API key for the selected model
+    if "gpt-" in llm_model and not openai_key:
+        raise ValueError(OPENAI_KEY_ERROR)
+    if "anthropic" in llm_model and not anthropic_key:
+        raise ValueError(ANTHROPIC_KEY_ERROR)
+    if "google-" in llm_model and not google_key:
+        raise ValueError(GOOGLE_KEY_ERROR)
 
     # Format dates
     min_date_str = _format_date(min_date, "2018-01-01")
