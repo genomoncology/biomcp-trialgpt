@@ -8,18 +8,15 @@ try:
 except ImportError:
     import google.generativeai as genai
 
-# Import configurations from note_extractor
+import anthropic
 
-from biomcp_trialgpt.streamlit_app.services.note_extractor import _google_key, anthropic_client
+# Import API key getter function
+from biomcp_trialgpt.streamlit_app.services.note_extractor import get_api_keys
 
 from .llm_utils import create_chat_completion as _create_chat_completion
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
-
-# Configure Google SDK if available
-if hasattr(genai, "configure"):
-    genai.configure(api_key=_google_key)
 
 
 def build_eligibility_prompt(presentation: str, trial_info: dict[str, Any], inc_exc: str) -> str:
@@ -91,10 +88,18 @@ def build_eligibility_prompt(presentation: str, trial_info: dict[str, Any], inc_
 
 
 def _call_llm(prompt: str, model: str) -> str:
+    # Get current API keys
+    openai_key, anthropic_key, google_key = get_api_keys()
+
     # OpenAI
     logger.info(f"Creating agent with model: {model}")
     if "gpt-" in model:
+        if not openai_key:
+            msg = "OpenAI API key not set. Please provide an API key in the sidebar."
+            raise ValueError(msg)
+
         resp = _create_chat_completion(
+            api_key=openai_key,
             model=model.split("gpt-")[1],
             messages=[{"role": "system", "content": ""}, {"role": "user", "content": prompt}],
             temperature=1,
@@ -103,6 +108,13 @@ def _call_llm(prompt: str, model: str) -> str:
     # Anthropic
     if "anthropic" in model:
         from anthropic import AI_PROMPT, HUMAN_PROMPT
+
+        if not anthropic_key:
+            msg = "Anthropic API key not set. Please provide an API key in the sidebar."
+            raise ValueError(msg)
+
+        # Create a new client instance with the current API key
+        anthropic_client = anthropic.Anthropic(api_key=anthropic_key)
 
         human_prompt = HUMAN_PROMPT + prompt + AI_PROMPT
         response = anthropic_client.messages.create(
@@ -114,6 +126,14 @@ def _call_llm(prompt: str, model: str) -> str:
         return response.content[0].text.strip()
     # Google
     if model.startswith("google-"):
+        if not google_key:
+            msg = "Google Gemini API key not set. Please provide an API key in the sidebar."
+            raise ValueError(msg)
+
+        # Configure genai with current API key
+        if hasattr(genai, "configure"):
+            genai.configure(api_key=google_key)
+
         model_name = model.split("google-")[1].replace("gla:", "")
         if hasattr(genai, "chat"):
             resp = genai.chat.completions.create(
@@ -123,7 +143,7 @@ def _call_llm(prompt: str, model: str) -> str:
             )
             return resp.candidates[0].content.strip()
         if hasattr(genai, "Client"):
-            client = genai.Client(api_key=_google_key)
+            client = genai.Client(api_key=google_key)
             chat = client.chats.create(model=model_name)
             response = chat.send_message(prompt)
             return response.text.strip()

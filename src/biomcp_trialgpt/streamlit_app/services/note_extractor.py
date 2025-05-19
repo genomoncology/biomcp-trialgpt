@@ -4,6 +4,7 @@ import os
 from typing import Any
 
 import anthropic
+import streamlit as st
 
 try:
     from google import genai
@@ -16,17 +17,15 @@ from .llm_utils import create_chat_completion as _create_chat_completion
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# API Keys
-_api_key = os.getenv("OPENAI_API_KEY")
-_anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-_google_key = os.getenv("GEMINI_API_KEY")
 
-# Initialize clients
-anthropic_client = anthropic.Anthropic(api_key=_anthropic_key) if _anthropic_key else None
+# API Keys - fallback to environment variables if not set in session state
+def get_api_keys():
+    """Get API keys from session state or environment variables."""
+    openai_key = st.session_state.get("openai_api_key", "") or os.getenv("OPENAI_API_KEY", "")
+    anthropic_key = st.session_state.get("anthropic_api_key", "") or os.getenv("ANTHROPIC_API_KEY", "")
+    google_key = st.session_state.get("gemini_api_key", "") or os.getenv("GEMINI_API_KEY", "")
+    return openai_key, anthropic_key, google_key
 
-# Configure for google.generativeai if available
-if _google_key and hasattr(genai, "configure"):
-    genai.configure(api_key=_google_key)
 
 # Extraction system prompt
 EXTRACTION_SYSTEM = """
@@ -65,9 +64,17 @@ def _get_extraction_response(presentation: str, model: str, prompt: str) -> str:
     Returns:
         The raw response content from the model as a string
     """
+    # Get current API keys
+    openai_key, anthropic_key, google_key = get_api_keys()
+
     # Route to the appropriate API based on selected model
     if "gpt-" in model:
+        if not openai_key:
+            msg = "OpenAI API key not set. Please provide an API key in the sidebar."
+            raise ValueError(msg)
+
         resp = _create_chat_completion(
+            api_key=openai_key,
             model=model.split("gpt-")[1],
             messages=[
                 {"role": "system", "content": EXTRACTION_SYSTEM},
@@ -79,9 +86,12 @@ def _get_extraction_response(presentation: str, model: str, prompt: str) -> str:
     elif "anthropic" in model:
         from anthropic import AI_PROMPT, HUMAN_PROMPT
 
-        if anthropic_client is None:
-            msg = "Anthropic API key not set or client not initialized."
+        if not anthropic_key:
+            msg = "Anthropic API key not set. Please provide an API key in the sidebar."
             raise ValueError(msg)
+
+        # Create a new client instance with the current API key
+        anthropic_client = anthropic.Anthropic(api_key=anthropic_key)
 
         human_prompt = HUMAN_PROMPT + prompt + AI_PROMPT
         response = anthropic_client.messages.create(
@@ -93,7 +103,16 @@ def _get_extraction_response(presentation: str, model: str, prompt: str) -> str:
         return response.content[0].text.strip()
     elif model.startswith("google-"):
         # Google Gemini via google.generativeai or google-genai SDK
+        if not google_key:
+            msg = "Google Gemini API key not set. Please provide an API key in the sidebar."
+            raise ValueError(msg)
+
         model_name = model.split("google-")[1].replace("gla:", "")
+
+        # Configure genai with current API key
+        if hasattr(genai, "configure"):
+            genai.configure(api_key=google_key)
+
         # If using google.generativeai
         if hasattr(genai, "chat"):
             resp = genai.chat.completions.create(
@@ -104,7 +123,7 @@ def _get_extraction_response(presentation: str, model: str, prompt: str) -> str:
             return resp.candidates[0].content.strip()
         # If using google-genai (Client)
         if hasattr(genai, "Client"):
-            client = genai.Client(api_key=_google_key)
+            client = genai.Client(api_key=google_key)
             # google-genai SDK: create a chat and send message
             chat = client.chats.create(model=model_name)
             response = chat.send_message(prompt)
