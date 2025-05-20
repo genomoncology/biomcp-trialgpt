@@ -44,7 +44,7 @@ def initialize_state(state: AgentState) -> AgentState:
     return {
         "messages": state.get("messages", []),
         "clinical_data": {},
-        "retrieval_params": {},
+        "retrieval_params": state.get("retrieval_params", {}),
         "trials": [],
         "eligibility_logs": {},
         "scoring_logs": {},
@@ -75,20 +75,26 @@ def process_clinical_extraction(state: AgentState) -> AgentState:
 def setup_trial_retrieval(state: AgentState) -> AgentState:
     """Set up parameters for trial retrieval."""
     clinical_data = state["clinical_data"]
+    conditions = clinical_data.get("conditions", [])
+    terms = clinical_data.get("terms", [])
+    interventions = clinical_data.get("interventions", [])
 
     if not state.get("retrieval_params"):
         current_year = datetime.now().year
         params = {
-            "recruiting_status": "Recruiting",
+            "recruiting_status": "ANY",
             "min_date": "2018-01-01",
             "max_date": f"{current_year + 1}-12-31",
-            "phase": "Phase 1|Phase 2|Phase 3",
-            "conditions": clinical_data.get("conditions", []),
-            "terms": clinical_data.get("terms", []),
-            "interventions": clinical_data.get("interventions", []),
+            "phase": "N/A",
+            "conditions": conditions,
+            "terms": terms,
+            "interventions": interventions,
         }
     else:
         params = state["retrieval_params"]
+        params["conditions"] = conditions
+        params["terms"] = terms
+        params["interventions"] = interventions
 
     return {
         **state,
@@ -265,10 +271,10 @@ def format_final_result(state: AgentState) -> AgentState:
 def run_langgraph_agent(
     presentation: str,
     llm_model: str = "gpt-4",
-    recruiting_status: str = "Recruiting",
+    recruiting_status: str = "ANY",
     min_date: Optional[Union[date, int]] = None,
     max_date: Optional[Union[date, int]] = None,
-    phase: str = "Phase 1|Phase 2|Phase 3",
+    phase: str = "N/A",
     debug_mode: bool = False,
 ) -> dict[str, Any]:
     """Run the LangGraph agent pipeline for clinical trial matching."""

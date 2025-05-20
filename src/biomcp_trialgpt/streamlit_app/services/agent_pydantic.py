@@ -338,10 +338,10 @@ async def search_clinical_trials(ctx: RunContext[PipelineConfig], patient: Patie
     logger.info("Searching for clinical trials")
 
     filter_params = {
-        "recruiting_status": ctx.deps.recruiting_status,
+        "recruiting_status": ctx.deps.recruiting_status or "ANY",
         "min_date": ctx.deps.min_date,
         "max_date": ctx.deps.max_date,
-        "phase": ctx.deps.phase,
+        "phase": ctx.deps.phase or "N/A",
         "conditions": patient.conditions,
         "terms": patient.terms,
         "interventions": patient.interventions,
