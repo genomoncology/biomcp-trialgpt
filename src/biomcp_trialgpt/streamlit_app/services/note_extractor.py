@@ -39,7 +39,6 @@ Extract from the free-text patient note exactly these JSON fields:
 - duration (str)
 - conditions (list[str])
 - terms (list[str])
-- interventions (list[str])
 - medications (list[str])
 - allergies (list[str])
 - vitals (dict)

@@ -66,7 +66,7 @@ Before running the application, ensure you have:
    - Recruiting Status (OPEN, CLOSED, ANY)
    - Date filters (Min/Max date)
    - Phase (Phase 1, Phase 2, Phase 3, Phase 4, N/A)
-4. Select an agent framework (Pydantic or LangGraph)
+4. Select an agent framework (LangGraph)
 5. Click "Submit" to process the note and find matching clinical trials
 6. View the results in the expandable sections for each step of the process:
    - Step 1: Clinical Note Extraction
@@ -78,7 +78,6 @@ Before running the application, ensure you have:
 
 The application supports multiple agent frameworks:
 
-- **Pydantic Agent**: Uses Pydantic for structured data validation
 - **LangGraph Agent**: Uses LangGraph for workflow orchestration
 
 ## Troubleshooting

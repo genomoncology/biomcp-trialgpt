@@ -77,7 +77,6 @@ def setup_trial_retrieval(state: AgentState) -> AgentState:
     clinical_data = state["clinical_data"]
     conditions = clinical_data.get("conditions", [])
     terms = clinical_data.get("terms", [])
-    interventions = clinical_data.get("interventions", [])
 
     if not state.get("retrieval_params"):
         current_year = datetime.now().year
@@ -88,13 +87,11 @@ def setup_trial_retrieval(state: AgentState) -> AgentState:
             "phase": "N/A",
             "conditions": conditions,
             "terms": terms,
-            "interventions": interventions,
         }
     else:
         params = state["retrieval_params"]
         params["conditions"] = conditions
         params["terms"] = terms
-        params["interventions"] = interventions
 
     return {
         **state,
