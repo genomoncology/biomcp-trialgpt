@@ -13,7 +13,7 @@ def patient_input_form():
     # Create a list of available models based on API keys
     available_models = []
     if google_key:
-        available_models.append("google-gemini-2.5-pro-preview-03-25")
+        available_models.append("google-gemini-2.5-pro-preview-05-06")
     if openai_key:
         available_models.append("gpt-o4-mini")
     if anthropic_key:
@@ -22,7 +22,7 @@ def patient_input_form():
     # Display a message if no models are available
     if not available_models:
         st.sidebar.warning("No API keys are set. Please add at least one API key in the API Keys section below.")
-        available_models = ["google-gemini-2.5-pro-preview-03-25", "gpt-o4-mini", "anthropic-claude-3-7-sonnet-latest"]
+        available_models = ["google-gemini-2.5-pro-preview-05-06", "gpt-o4-mini", "anthropic-claude-3-7-sonnet-latest"]
 
     llm_model = st.sidebar.selectbox("Extraction Model", available_models)
 

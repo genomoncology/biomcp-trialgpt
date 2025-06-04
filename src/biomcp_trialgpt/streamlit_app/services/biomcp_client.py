@@ -17,7 +17,6 @@ class BioMCPClient:
         self,
         conditions: list[str],
         terms: list[str],
-        interventions: list[str],
         recruiting_status: Optional[str] = None,
         min_date: Optional[date] = None,
         max_date: Optional[date] = None,
@@ -35,8 +34,6 @@ class BioMCPClient:
             query_args["conditions"] = conditions
         if terms:
             query_args["terms"] = terms
-        if interventions:
-            query_args["interventions"] = interventions
         if recruiting_status and recruiting_status != "ANY":
             query_args["recruiting_status"] = getattr(RecruitingStatus, recruiting_status, None)
         if phase and phase != "N/A":

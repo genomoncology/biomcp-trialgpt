@@ -143,7 +143,6 @@ Before running the application, ensure you have:
 
 The application supports multiple agent frameworks:
 
-- **Pydantic Agent**: Uses Pydantic for structured data validation
 - **LangGraph Agent**: Uses LangGraph for workflow orchestration
 
 ## Troubleshooting

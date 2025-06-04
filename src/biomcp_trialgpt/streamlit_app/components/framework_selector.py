@@ -16,7 +16,6 @@ def framework_selector(available_options: Optional[list[str]] = None):
     """
     st.sidebar.subheader("Agent Framework")
     default_options = [
-        "pydantic",
         "langgraph",
     ]
 

@@ -15,16 +15,6 @@ st.set_page_config(page_title="BioMCP Trial Matching", layout="wide")
 
 # Import available agent frameworks
 try:
-    from biomcp_trialgpt.streamlit_app.services.agent_pydantic import run_pydantic_agent
-
-    pydantic_available = True
-except ValueError as e:
-    if "OPENAI_API_KEY" in str(e) or "ANTHROPIC_API_KEY" in str(e) or "GEMINI_API_KEY" in str(e):
-        pydantic_available = False
-    else:
-        raise
-
-try:
     from biomcp_trialgpt.streamlit_app.services.agent_langgraph import run_langgraph_agent
 
     langgraph_available = True
@@ -521,8 +511,6 @@ def _check_available_frameworks() -> list[str]:
     has_any_key = has_openai or has_anthropic or has_gemini
 
     available_frameworks = []
-    if pydantic_available and has_any_key:
-        available_frameworks.append("pydantic")
     if langgraph_available and has_any_key:
         available_frameworks.append("langgraph")
 
@@ -540,7 +528,6 @@ def _check_available_frameworks() -> list[str]:
 def _setup_agent_function(framework: str) -> Optional[Callable[..., Any]]:
     """Set up the agent function based on the selected framework."""
     agent_map = {
-        "pydantic": run_pydantic_agent if pydantic_available else None,
         "langgraph": run_langgraph_agent if langgraph_available else None,
     }
     agent_function = agent_map.get(framework)

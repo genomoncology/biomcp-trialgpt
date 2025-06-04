@@ -12,12 +12,9 @@ def _format_clinical_data(
         # LangGraph data
         step1["data"] = clinical_data
     elif patient_data:
-        # Pydantic data
         try:
-            # Try model_dump first (newer Pydantic)
             if hasattr(patient_data, "model_dump"):
                 step1["data"] = patient_data.model_dump(exclude_none=True)
-            # Fall back to dict for older Pydantic
             else:
                 step1["data"] = patient_data.dict(exclude_none=True)
         except Exception:
@@ -42,7 +39,6 @@ def _format_trial_retrieval(
         # LangGraph parameters
         step2["params"] = retrieval_params
     elif config:
-        # Pydantic parameters
         trial_params = {
             "recruiting_status": getattr(config, "recruiting_status", ""),
             "min_date": getattr(config, "min_date", ""),
@@ -50,7 +46,6 @@ def _format_trial_retrieval(
             "phase": getattr(config, "phase", ""),
             "conditions": (patient_data.conditions if patient_data else []),
             "terms": (patient_data.terms if patient_data else []),
-            "interventions": (patient_data.interventions if patient_data else []),
         }
         step2["params"] = trial_params
 
@@ -59,7 +54,6 @@ def _format_trial_retrieval(
         # LangGraph trials (already a list of dicts)
         step2["response"] = trials
     elif retrieved_trials:
-        # Pydantic trials (need to convert to dicts)
         try:
             trial_list = []
             for trial in retrieved_trials:
@@ -85,7 +79,6 @@ def _format_eligibility_assessment(
 
     # For consistent formatting to match what the UI expects
     if eligibility_logs:
-        # LangGraph eligibility logs - need to reformat to match Pydantic format
         results = []
         for nct_id, data in eligibility_logs.items():
             results.append({
@@ -97,10 +90,8 @@ def _format_eligibility_assessment(
             })
         step3 = {"results": results}
     elif eligibility_results:
-        # Pydantic eligibility results - already in correct format
         results = []
         for result in eligibility_results:
-            # Convert Pydantic model to dict
             if hasattr(result, "trial_id"):
                 results.append({
                     "trial_id": result.trial_id,
@@ -133,7 +124,6 @@ def _format_scoring_and_ranking(
         # LangGraph scoring logs (already a dict)
         step4["scoring_logs"] = scoring_logs
     elif scoring_results:
-        # Pydantic scoring results
         logs = {}
         for result in scoring_results:
             if hasattr(result, "trial_id"):
@@ -150,7 +140,6 @@ def _format_scoring_and_ranking(
         # LangGraph ranked trials (already in correct tuple format)
         step4["ranked"] = ranked_trials
     elif scoring_results:
-        # Pydantic ranked trials - create a list of tuples like LangGraph
         ranked = []
         for result in sorted(scoring_results, key=lambda r: getattr(r, "eligibility_score", 0), reverse=True):
             if hasattr(result, "trial_id"):
@@ -176,7 +165,6 @@ def format_response_for_ui(
     scoring_logs: Optional[dict[str, Any]] = None,
     ranked_trials: Optional[list[tuple[str, dict[str, Any]]]] = None,
     model_name: str = "",
-    # Pydantic-specific data (optional)
     patient_data: Optional[Any] = None,
     retrieved_trials: Optional[list[Any]] = None,
     eligibility_results: Optional[list[Any]] = None,
@@ -187,7 +175,7 @@ def format_response_for_ui(
     Create a standardized response format for the UI that works with both agent types.
 
     This function ensures consistent output format regardless of which agent implementation
-    is used (Pydantic or LangGraph).
+    is used (LangGraph).
 
     Args:
         clinical_data: Extracted patient clinical data (LangGraph)
@@ -198,11 +186,11 @@ def format_response_for_ui(
         ranked_trials: Ranked trials list (LangGraph)
         model_name: LLM model name used
 
-        patient_data: Patient data model (Pydantic)
-        retrieved_trials: Trial models (Pydantic)
-        eligibility_results: Eligibility result models (Pydantic)
-        scoring_results: Scoring result models (Pydantic)
-        config: Pipeline configuration (Pydantic)
+        patient_data: Patient data model
+        retrieved_trials: Trial models
+        eligibility_results: Eligibility result models
+        scoring_results: Scoring result models
+        config: Pipeline configuration
 
     Returns:
         A dictionary with the standard response format expected by the UI
